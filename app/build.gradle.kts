@@ -63,8 +63,8 @@ dependencies {
     implementation("com.tom-roush:pdfbox-android:2.0.27.0")
 
     // Markdown rendering for the summary view (core + Material 3 module).
-    implementation("com.mikepenz:multiplatform-markdown-renderer:0.27.0")
-    implementation("com.mikepenz:multiplatform-markdown-renderer-m3:0.27.0")
+    implementation("com.mikepenz:multiplatform-markdown-renderer:0.43.0")
+    implementation("com.mikepenz:multiplatform-markdown-renderer-m3:0.43.0")
 
     // On-device LLM via llama.cpp, through the Llamatik Maven library.
     // No NDK, no native build: it ships prebuilt arm64 binaries.
