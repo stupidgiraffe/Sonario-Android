@@ -55,7 +55,7 @@ dependencies {
     implementation("androidx.navigation:navigation-compose:2.8.1")
 
     // Networking for source fetching (YouTube captions, web articles)
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("com.squareup.okhttp3:okhttp:5.4.0")
     // HTML parsing for web-article extraction (the Jsoup analogue of BeautifulSoup)
     implementation("org.jsoup:jsoup:1.18.1")
 
