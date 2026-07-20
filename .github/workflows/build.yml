@@ -1,10 +1,6 @@
-name: Build APK
+name: Build APK (Manual)
 
 on:
-  push:
-    branches: [ main, 'upgrade/**' ]
-  pull_request:
-    branches: [ main ]
   workflow_dispatch:
 
 jobs:
