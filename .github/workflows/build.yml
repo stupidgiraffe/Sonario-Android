@@ -14,8 +14,30 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
+  source-snapshot:
     if: github.event_name == 'workflow_dispatch' || github.head_ref == 'build/focal-debug-repair'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Upload repair source snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: focal-source-snapshot
+          path: |
+            build.gradle.kts
+            settings.gradle.kts
+            gradle.properties
+            gradle/**
+            app/build.gradle.kts
+            app/proguard-rules.pro
+            app/src/main/**
+          if-no-files-found: error
+          retention-days: 2
+
+  build:
+    if: ${{ false }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
