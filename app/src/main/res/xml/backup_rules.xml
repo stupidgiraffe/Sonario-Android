@@ -1,5 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <full-backup-content>
-    <!-- Don't back up multi-GB model files. -->
+    <!--
+      Preserve only non-secret preferences. Session sources may contain private
+      or multi-megabyte documents, and encrypted API-key blobs cannot be restored
+      without their device-bound Android Keystore key.
+    -->
+    <include
+        domain="sharedpref"
+        path="sonario_settings.xml"
+        requireFlags="clientSideEncryption|deviceToDeviceTransfer" />
+
     <exclude domain="file" path="models/" />
+    <exclude domain="file" path="sonario_sessions/" />
+    <exclude domain="file" path="last_crash.txt" />
+    <exclude domain="external" path="last_crash.txt" />
+    <exclude domain="sharedpref" path="sonario_secure_keys.xml" />
+    <exclude domain="sharedpref" path="rate_limiter.xml" />
 </full-backup-content>
