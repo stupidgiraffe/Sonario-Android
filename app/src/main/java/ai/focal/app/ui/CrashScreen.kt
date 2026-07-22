@@ -1,18 +1,21 @@
 package ai.focal.app.ui
 
+import android.content.ClipData
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.platform.ClipEntry
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.launch
 
 /**
  * Shown on the launch AFTER a crash. Displays the recorded stack trace so the
@@ -22,7 +25,8 @@ import androidx.compose.ui.unit.sp
  */
 @Composable
 fun CrashScreen(text: String, onDismiss: () -> Unit) {
-    val clipboard = LocalClipboardManager.current
+    val clipboard = LocalClipboard.current
+    val scope = rememberCoroutineScope()
     Surface(color = FocalColors.Deep, modifier = Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().padding(16.dp)) {
             Text("Focal hit an error",
@@ -39,7 +43,13 @@ fun CrashScreen(text: String, onDismiss: () -> Unit) {
 
             Row {
                 Button(
-                    onClick = { clipboard.setText(AnnotatedString(text)) },
+                    onClick = {
+                        scope.launch {
+                            clipboard.setClipEntry(ClipEntry(
+                                ClipData.newPlainText("Focal crash report", text),
+                            ))
+                        }
+                    },
                     colors = ButtonDefaults.buttonColors(
                         containerColor = FocalColors.Green,
                         contentColor = FocalColors.Abyss),

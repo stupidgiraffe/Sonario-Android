@@ -33,6 +33,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import java.util.Locale
 
 enum class SummaryView { NORMAL, DETAILED, BULLETS, CHAPTER }
 
@@ -125,7 +126,8 @@ class SummaryViewModel(app: Application) : AndroidViewModel(app) {
         get() = processLastSummarizer
         set(value) { processLastSummarizer = value }
 
-    private val appCtx = app.applicationContext
+    private val appCtx: android.content.Context
+        get() = getApplication<Application>().applicationContext
 
     /** Keep the process foreground-priority so long jobs survive backgrounding. */
     private fun startKeepAlive(text: String) {
@@ -378,7 +380,7 @@ class SummaryViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun formatCount(n: Long): String = when {
-        n >= 1_000_000 -> String.format("%.1fM", n / 1_000_000.0)
+        n >= 1_000_000 -> String.format(Locale.getDefault(), "%.1fM", n / 1_000_000.0)
         n >= 1_000 -> "${(n / 1000)}K"
         else -> n.toString()
     }

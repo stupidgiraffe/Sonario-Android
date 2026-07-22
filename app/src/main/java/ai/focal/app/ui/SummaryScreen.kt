@@ -1,6 +1,6 @@
 package ai.focal.app.ui
 
-// Focal v1.4.0 - restored original SummaryScreen
+import android.content.ClipData
 
 import ai.focal.app.R
 import ai.focal.app.data.EngineChoice
@@ -10,9 +10,9 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.ClipEntry
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.text.AnnotatedString
 import ai.focal.app.summarize.SummarizeEngine
 import androidx.compose.foundation.background
 import androidx.compose.foundation.Image
@@ -51,6 +51,7 @@ import com.mikepenz.markdown.m3.Markdown
 import com.mikepenz.markdown.m3.markdownColor
 import com.mikepenz.markdown.m3.markdownTypography
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -574,7 +575,8 @@ private fun ResultArea(
 
             Spacer(Modifier.height(16.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
-                val clipboard = LocalClipboardManager.current
+                val clipboard = LocalClipboard.current
+                val clipboardScope = rememberCoroutineScope()
                 val copyText = when (view) {
                     SummaryView.NORMAL -> res.normal
                     SummaryView.DETAILED -> res.detailed
@@ -582,7 +584,11 @@ private fun ResultArea(
                     SummaryView.CHAPTER -> res.chapters.ifBlank { res.normal }
                 }
                 IconButton(onClick = {
-                    clipboard.setText(AnnotatedString(stripMd(copyText)))
+                    clipboardScope.launch {
+                        clipboard.setClipEntry(ClipEntry(
+                            ClipData.newPlainText("Focal summary", stripMd(copyText)),
+                        ))
+                    }
                 }) {
                     Icon(Icons.Filled.ContentCopy, "Copy",
                         tint = FocalColors.InkSoft)
@@ -590,7 +596,7 @@ private fun ResultArea(
                 Spacer(Modifier.width(8.dp))
                 ExportMenu(res, vm)
                 Spacer(Modifier.weight(1f))
-                approxMinutes(res.approxMinutes)
+                ApproxMinutes(res.approxMinutes)
             }
 
             Spacer(Modifier.height(16.dp))
@@ -760,7 +766,7 @@ private fun ErrorCard(error: String) {
 }
 
 @Composable
-private fun approxMinutes(minutes: Int?) {
+private fun ApproxMinutes(minutes: Int?) {
     if (minutes != null && minutes > 0) {
         Text("~$minutes min source",
             color = FocalColors.Muted,

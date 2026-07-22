@@ -37,9 +37,9 @@ import java.io.RandomAccessFile
 @Composable
 fun SysMeter(modifier: Modifier = Modifier) {
     val context = LocalContext.current
-    var ramUsedMb by remember { mutableStateOf(0L) }
-    var ramFreeMb by remember { mutableStateOf(0L) }
-    var cpuPct by remember { mutableStateOf(0) }
+    var ramUsedMb by remember { mutableLongStateOf(0L) }
+    var ramFreeMb by remember { mutableLongStateOf(0L) }
+    var cpuPct by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(Unit) {
         val cpuReader = CpuReader()

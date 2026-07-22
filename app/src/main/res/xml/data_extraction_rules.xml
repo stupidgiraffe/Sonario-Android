@@ -2,22 +2,8 @@
 <data-extraction-rules>
     <cloud-backup disableIfNoEncryptionCapabilities="true">
         <include domain="sharedpref" path="sonario_settings.xml" />
-        <exclude domain="file" path="models/" />
-        <exclude domain="file" path="sonario_sessions/" />
-        <exclude domain="file" path="last_crash.txt" />
-        <exclude domain="external" path="last_crash.txt" />
-        <exclude domain="sharedpref" path="sonario_secure_keys.xml" />
-        <exclude domain="sharedpref" path="rate_limiter.xml" />
-        <exclude domain="sharedpref" path="rate_limiter_groq_qwen36.xml" />
     </cloud-backup>
     <device-transfer>
         <include domain="sharedpref" path="sonario_settings.xml" />
-        <exclude domain="file" path="models/" />
-        <exclude domain="file" path="sonario_sessions/" />
-        <exclude domain="file" path="last_crash.txt" />
-        <exclude domain="external" path="last_crash.txt" />
-        <exclude domain="sharedpref" path="sonario_secure_keys.xml" />
-        <exclude domain="sharedpref" path="rate_limiter.xml" />
-        <exclude domain="sharedpref" path="rate_limiter_groq_qwen36.xml" />
     </device-transfer>
 </data-extraction-rules>

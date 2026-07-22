@@ -10,11 +10,5 @@
         path="sonario_settings.xml"
         requireFlags="clientSideEncryption|deviceToDeviceTransfer" />
 
-    <exclude domain="file" path="models/" />
-    <exclude domain="file" path="sonario_sessions/" />
-    <exclude domain="file" path="last_crash.txt" />
-    <exclude domain="external" path="last_crash.txt" />
-    <exclude domain="sharedpref" path="sonario_secure_keys.xml" />
-    <exclude domain="sharedpref" path="rate_limiter.xml" />
-    <exclude domain="sharedpref" path="rate_limiter_groq_qwen36.xml" />
+    <!-- Once an include exists, Android excludes every path not allowlisted. -->
 </full-backup-content>

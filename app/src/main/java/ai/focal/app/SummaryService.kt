@@ -68,7 +68,7 @@ class SummaryService : Service() {
                 "$packageName:summary",
             ).apply {
                 setReferenceCounted(false)
-                acquire()
+                acquire(MAX_LOCK_DURATION_MS)
             }
         }
 
@@ -97,9 +97,9 @@ class SummaryService : Service() {
         private const val NOTIFICATION_ID = 1001
         private const val COMPLETION_NOTIFICATION_ID = 1002
         private const val EXTRA_TEXT = "text"
+        private const val MAX_LOCK_DURATION_MS = 6 * 60 * 60 * 1000L
 
         private fun ensureChannel(context: Context) {
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
             val manager = context.getSystemService(Context.NOTIFICATION_SERVICE)
                 as NotificationManager
             if (manager.getNotificationChannel(CHANNEL_ID) == null) {
@@ -170,11 +170,7 @@ class SummaryService : Service() {
         fun start(context: Context, text: String = "Summarizing…") {
             val intent = Intent(context, SummaryService::class.java)
                 .putExtra(EXTRA_TEXT, text)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
-            }
+            context.startForegroundService(intent)
         }
 
         /** Updates the notification directly, avoiding background service-start rules. */

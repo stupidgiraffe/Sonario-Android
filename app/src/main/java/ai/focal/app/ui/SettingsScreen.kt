@@ -49,6 +49,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import ai.focal.app.data.EngineChoice
 import ai.focal.app.llm.LlmProvider
+import java.util.Locale
 
 /** Provider-scoped BYOK settings using the app's existing visual language. */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -364,7 +365,7 @@ private fun EngineOption(
 }
 
 private fun fmtK(value: Long): String = when {
-    value >= 1_000_000 -> String.format("%.1fM", value / 1_000_000.0)
+    value >= 1_000_000 -> String.format(Locale.getDefault(), "%.1fM", value / 1_000_000.0)
     value >= 1_000 -> "${value / 1_000}K"
     else -> value.toString()
 }
