@@ -951,7 +951,7 @@ class SourceFetcher {
 
     private fun diagnosticMessage(e: Exception): String = e.message
         ?.replace(';', ',')
-        .replace('\\n', ' ')
+        ?.replace('\n', ' ')
         ?.take(180) ?: e.javaClass.simpleName
 
     private fun watchUrl(videoId: String): String =

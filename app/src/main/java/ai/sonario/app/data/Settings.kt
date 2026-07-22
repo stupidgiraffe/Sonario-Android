@@ -17,11 +17,12 @@ import ai.sonario.app.llm.SecureStorage
  */
 class Settings(context: Context) {
 
-    private val prefs = context.applicationContext
+    private val appContext = context.applicationContext
+    private val prefs = appContext
         .getSharedPreferences("sonario_settings", Context.MODE_PRIVATE)
 
     init {
-        migrateLegacyKey(context)
+        migrateLegacyKey(appContext)
     }
 
     var engine: EngineChoice
@@ -72,15 +73,15 @@ class Settings(context: Context) {
 
     /** True if the provider has a stored API key. */
     fun hasKeyFor(provider: LlmProvider): Boolean =
-        SecureStorage.hasKey(context, provider.id)
+        SecureStorage.hasKey(appContext, provider.id)
 
     /** Returns the stored API key for [provider], or null if not set. */
     fun keyFor(provider: LlmProvider): String? =
-        SecureStorage.getKey(context, provider.id)
+        SecureStorage.getKey(appContext, provider.id)
 
     /** Stores (or clears) the API key for [provider]. */
     fun setKeyFor(provider: LlmProvider, key: String?) {
-        SecureStorage.storeKey(context, provider.id, key)
+        SecureStorage.storeKey(appContext, provider.id, key)
     }
 
     /** Builds a [ProviderConfig] for [provider] from the saved settings. */

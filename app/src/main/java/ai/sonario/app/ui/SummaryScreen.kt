@@ -515,7 +515,7 @@ private fun ProgressCard(ui: UiState, vm: SummaryViewModel) {
                     style = MaterialTheme.typography.bodySmall)
                 Spacer(Modifier.weight(1f))
                 TextButton(
-                    onClick = { vm.cancel() },
+                    onClick = { vm.cancelSummary() },
                     colors = ButtonDefaults.textButtonColors(
                         contentColor = SonarioColors.Muted),
                 ) { Text("Cancel") }
@@ -563,7 +563,9 @@ private fun ResultArea(
                         inlineCodeBackground = SonarioColors.Panel2,
                     ),
                     typography = markdownTypography(
-                        default = MaterialTheme.typography.bodyMedium.copy(
+                        text = MaterialTheme.typography.bodyMedium.copy(
+                            color = SonarioColors.Ink),
+                        paragraph = MaterialTheme.typography.bodyMedium.copy(
                             color = SonarioColors.Ink),
                     ),
 
@@ -580,7 +582,7 @@ private fun ResultArea(
                     SummaryView.CHAPTER -> res.chapters.ifBlank { res.normal }
                 }
                 IconButton(onClick = {
-                    clipboard.setText(AnnotatedString(stripMd(copyText))) {
+                    clipboard.setText(AnnotatedString(stripMd(copyText)))
                 }) {
                     Icon(Icons.Filled.ContentCopy, "Copy",
                         tint = SonarioColors.InkSoft)
@@ -757,6 +759,7 @@ private fun ErrorCard(error: String) {
     }
 }
 
+@Composable
 private fun approxMinutes(minutes: Int?) {
     if (minutes != null && minutes > 0) {
         Text("~$minutes min source",

@@ -14,6 +14,7 @@ import ai.sonario.app.data.SummarySession
 import ai.sonario.app.llm.BUNDLED_MODELS
 import ai.sonario.app.llm.CloudEngine
 import ai.sonario.app.llm.LlmEngine
+import ai.sonario.app.llm.LlmProvider
 import ai.sonario.app.llm.ModelDownloader
 import ai.sonario.app.llm.ModelInfo
 import ai.sonario.app.llm.RateLimiter
@@ -89,7 +90,7 @@ class SummaryViewModel(app: Application) : AndroidViewModel(app) {
     private val cloud = CloudEngine(
         context = app,
         apiKeyProvider = { settings.keyFor(settings.cloudProvider) },
-        modelProvider = { settings.modelFor(settings.cloudProvider) },
+        configProvider = { settings.configFor(settings.cloudProvider) },
         rateLimiter = rateLimiter,
         onRateWait = { seconds -> onRateWait(seconds) },
         onNetworkStatus = { message -> onNetworkStatus(message) },
@@ -229,7 +230,8 @@ class SummaryViewModel(app: Application) : AndroidViewModel(app) {
             kind = "Document",
             engineChoice = state.engineChoice,
             modelFileName = model.fileName,
-            groqModel = state.modelFor(settings.cloudProvider),
+            cloudProviderId = settings.cloudProvider.id,
+            cloudModel = settings.modelFor(settings.cloudProvider),
             phase = "reading file",
         ))
         prepareUiForSession(session)
@@ -408,6 +410,7 @@ class SummaryViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun applySession(session: SummarySession, restoredAtLaunch: Boolean = false) {
+        val sessionProvider = LlmProvider.fromId(session.cloudProviderId)
         val models = llm.availableModels()
         val chosenModel = models.firstOrNull { it.fileName == session.modelFileName }
             ?: _ui.value.model
@@ -426,8 +429,11 @@ class SummaryViewModel(app: Application) : AndroidViewModel(app) {
         }
 
         settings.engine = session.engineChoice
-        if (session.engineChoice == EngineChoice.CLOUD && session.modelFor(settings.cloudProvider).isNotBlank()) {
-            settings.setModelFor(settings.cloudProvider, session.groqModel)
+        if (session.engineChoice == EngineChoice.CLOUD) {
+            settings.cloudProvider = sessionProvider
+            if (session.cloudModel.isNotBlank()) {
+                settings.setModelFor(sessionProvider, session.cloudModel)
+            }
         }
         lastSourceText = session.sourceText
         lastSummarizer = if (session.sourceText.isNotBlank()) {
@@ -459,7 +465,7 @@ class SummaryViewModel(app: Application) : AndroidViewModel(app) {
             models = models,
             hasAnyModel = models.any { it.present },
             engineChoice = session.engineChoice,
-            groqModel = session.modelFor(settings.cloudProvider),
+            groqModel = session.cloudModel.ifBlank { settings.modelFor(sessionProvider) },
             activeSessionId = session.id,
             resumeAvailable = canResume && processSummaryJob?.isActive != true,
             sessionNotice = notice,
@@ -535,6 +541,13 @@ class SummaryViewModel(app: Application) : AndroidViewModel(app) {
                     error = "This session stopped before the source was saved, so it cannot be resumed.")
                 return@launch
             }
+            val sessionProvider = LlmProvider.fromId(loaded.cloudProviderId)
+            if (loaded.engineChoice == EngineChoice.CLOUD) {
+                settings.cloudProvider = sessionProvider
+                if (loaded.cloudModel.isNotBlank()) {
+                    settings.setModelFor(sessionProvider, loaded.cloudModel)
+                }
+            }
             if (!validateEngine(loaded.engineChoice, modelFor(loaded))) return@launch
 
             val session = sessionStore.save(loaded.copy(
@@ -543,9 +556,6 @@ class SummaryViewModel(app: Application) : AndroidViewModel(app) {
                 phase = loaded.phase.ifBlank { "resuming" },
             ))
             settings.engine = session.engineChoice
-            if (session.engineChoice == EngineChoice.CLOUD) {
-                settings.setModelFor(settings.cloudProvider, session.groqModel)
-            }
             val summarizer = makeSummarizer(session.engineChoice)
             val model = modelFor(session)
             attachProgress(summarizer)
@@ -572,9 +582,10 @@ class SummaryViewModel(app: Application) : AndroidViewModel(app) {
             SummarizeEngine(llm, bigContext = false)
 
     private fun validateEngine(choice: EngineChoice, model: ModelInfo): Boolean {
-        if (choice == EngineChoice.CLOUD && !settings.hasKeyFor(settings.cloudProvider)) {
+        val provider = settings.cloudProvider
+        if (choice == EngineChoice.CLOUD && provider.needsKey && !settings.hasKeyFor(provider)) {
             _ui.value = _ui.value.copy(
-                error = "This session used Groq, but no Groq API key is currently set.")
+                error = "This session uses ${provider.displayName}, but no API key is currently set.")
             return false
         }
         if (choice == EngineChoice.ON_DEVICE && !llm.isModelPresent(model)) {
@@ -614,7 +625,7 @@ class SummaryViewModel(app: Application) : AndroidViewModel(app) {
             askError = null,
             qaHistory = session.qaHistory.map { QaPair(it.question, it.answer) },
             engineChoice = session.engineChoice,
-            groqModel = session.modelFor(settings.cloudProvider),
+            groqModel = session.cloudModel.ifBlank { settings.modelFor(settings.cloudProvider) },
             activeSessionId = session.id,
             resumeAvailable = false,
             sessionNotice = notice,
@@ -753,7 +764,7 @@ class SummaryViewModel(app: Application) : AndroidViewModel(app) {
                 else "",
             )
             refreshSessionPreviewsNow()
-            SummaryService.failed(appCtx, "Summary stopped: ${saved.title}")
+            SummaryService.failed(appCtx, "Summary stopped: ${session.title}")
         } finally {
             progressJob?.cancel()
             progressJob = null
@@ -876,7 +887,8 @@ class SummaryViewModel(app: Application) : AndroidViewModel(app) {
             kind = "Source",
             engineChoice = state.engineChoice,
             modelFileName = model.fileName,
-            groqModel = state.modelFor(settings.cloudProvider),
+            cloudProviderId = settings.cloudProvider.id,
+            cloudModel = settings.modelFor(settings.cloudProvider),
             phase = "fetching",
         ))
         prepareUiForSession(session)
