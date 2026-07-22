@@ -21,9 +21,9 @@ MIT copyright and license are preserved in [LICENSE](LICENSE) and [NOTICE](NOTIC
 - TXT, Markdown, and PDF export through Android's Storage Access Framework
 
 Local model compatibility and end-to-end cloud calls still require physical
-device and owner-credential validation. The final evidence is recorded in
-`docs/RELEASE_READINESS_1.0.0.md`; the build passing alone is not presented as
-device validation.
+device and owner-credential validation. The final evidence is recorded in the
+[Focal 1.0.0 release-readiness report](docs/RELEASE_READINESS_1.0.0.md); the build
+passing alone is not presented as device validation.
 
 ## Privacy and credentials
 
