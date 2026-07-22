@@ -2,19 +2,20 @@ name: Focal Diagnostic APK
 
 on:
   workflow_dispatch:
-  push:
+  pull_request:
     branches:
-      - build/focal-debug-repair
+      - main
 
 permissions:
   contents: read
 
 concurrency:
-  group: focal-debug-repair
+  group: focal-debug-repair-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
   build:
+    if: github.event_name == 'workflow_dispatch' || github.head_ref == 'build/focal-debug-repair'
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
