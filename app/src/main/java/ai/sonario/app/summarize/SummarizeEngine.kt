@@ -2,6 +2,8 @@ package ai.sonario.app.summarize
 
 import ai.sonario.app.llm.InferenceEngine
 import ai.sonario.app.llm.ModelInfo
+import ai.sonario.app.llm.ProviderConfig
+import ai.sonario.app.llm.ProviderCapabilities
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collect
@@ -23,18 +25,40 @@ import kotlinx.coroutines.flow.collect
  */
 class SummarizeEngine(
     private val engine: InferenceEngine,
-    private val bigContext: Boolean = false,
+    private val profile: Profile = Profile.LOCAL,
 ) {
 
-    // On-device: ~2800 chars/chunk (~800 tokens). Cloud: much larger, since a
-    // 128k-context model swallows most sources in one or a few passes.
-    private val chunkChars = if (bigContext) 40000 else 2800
-    private val singlePassLimit = if (bigContext) 120000 else 3200
+    enum class Profile {
+        LOCAL,
+        CLOUD_LARGE_CONTEXT,
+        GROQ_QWEN_FREE,
+    }
+
+    private val bigContext = profile != Profile.LOCAL
+
+    private val chunkChars = when (profile) {
+        Profile.LOCAL -> 2_800
+        Profile.CLOUD_LARGE_CONTEXT -> 40_000
+        Profile.GROQ_QWEN_FREE -> 14_000
+    }
+    private val singlePassLimit = when (profile) {
+        Profile.LOCAL -> 3_200
+        Profile.CLOUD_LARGE_CONTEXT -> 120_000
+        Profile.GROQ_QWEN_FREE -> 16_000
+    }
 
     // Work cap. On-device this bounds runtime (CPU is slow). Cloud can afford
     // more passes, but we still cap so a giant book stays within rate limits.
-    private val maxChunks = if (bigContext) 40 else 20
-    private val maxChunkChars = if (bigContext) 48000 else 6000
+    private val maxChunks = when (profile) {
+        Profile.LOCAL -> 20
+        Profile.CLOUD_LARGE_CONTEXT -> 40
+        Profile.GROQ_QWEN_FREE -> 14
+    }
+    private val maxChunkChars = when (profile) {
+        Profile.LOCAL -> 6_000
+        Profile.CLOUD_LARGE_CONTEXT -> 48_000
+        Profile.GROQ_QWEN_FREE -> 16_000
+    }
 
     data class Progress(
         val phase: String,      // "fetching" | "chunking" | "condensing" | "synthesizing" | "deriving" | "done"
@@ -163,7 +187,12 @@ class SummarizeEngine(
             val ch = chapters[i]
             _progress.value = Progress("chapters", i + 1, chapters.size)
             val summary = runCatching {
-                Cleaner.clean(streamCollect(Prompts.CHAPTER, source(ch.text), maxTokens = 300))
+                val chapterText = if (profile == Profile.GROQ_QWEN_FREE) {
+                    ch.text.take(singlePassLimit)
+                } else {
+                    ch.text
+                }
+                Cleaner.clean(streamCollect(Prompts.CHAPTER, source(chapterText), maxTokens = 300))
             }.getOrDefault("")
             val section = buildString {
                 append("## ${ch.title}\n\n")
@@ -204,7 +233,11 @@ class SummarizeEngine(
             streamCollect(
                 Prompts.ASK,
                 user,
-                maxTokens = if (bigContext) 1200 else 700,
+                maxTokens = when (profile) {
+                    Profile.LOCAL -> 700
+                    Profile.CLOUD_LARGE_CONTEXT -> 1_200
+                    Profile.GROQ_QWEN_FREE -> 1_000
+                },
             )
         )
         _progress.value = Progress("done")
@@ -215,8 +248,16 @@ class SummarizeEngine(
     }
 
     private fun selectRelevantExcerpts(question: String, sourceText: String): List<String> {
-        val excerptSize = if (bigContext) 1800 else 1000
-        val maxExcerpts = if (bigContext) 30 else 6
+        val excerptSize = when (profile) {
+            Profile.LOCAL -> 1_000
+            Profile.CLOUD_LARGE_CONTEXT -> 1_800
+            Profile.GROQ_QWEN_FREE -> 1_400
+        }
+        val maxExcerpts = when (profile) {
+            Profile.LOCAL -> 6
+            Profile.CLOUD_LARGE_CONTEXT -> 30
+            Profile.GROQ_QWEN_FREE -> 8
+        }
         val all = chunkText(sourceText, excerptSize)
         if (all.isEmpty()) return listOf(sourceText.take(excerptSize))
         if (all.size <= maxExcerpts) return all
@@ -279,9 +320,12 @@ class SummarizeEngine(
     // ── stages ──────────────────────────────────────────────────────────────────
     /** pipeline._final_combine, simplified: one-shot, else hierarchical batches. */
     private suspend fun finalCombine(joined: String): String {
-        // 1) one-shot
-        runCatching {
-            return streamCollect(Prompts.REDUCE, "Section notes, in order:\n\n$joined")
+        // Qwen's free-tier request must stay inside its minute budget. Other
+        // profiles retain the large-context one-shot path.
+        if (profile != Profile.GROQ_QWEN_FREE || joined.length <= singlePassLimit) {
+            runCatching {
+                return streamCollect(Prompts.REDUCE, "Section notes, in order:\n\n$joined")
+            }
         }
         // 2) hierarchical: batch the note-blocks, condense each, then combine
         val blocks = joined.split("\n\n").filter { it.isNotBlank() }
@@ -309,9 +353,22 @@ class SummarizeEngine(
     ): String {
         // Detailed wants real length. Give the cloud engine a large output budget
         // (~2 full pages); on-device stays modest so it doesn't run for ages.
-        val onePassCap = if (bigContext) 4000 else 1600
-        val chunkCap = if (bigContext) 3000 else 1200
-        if (src.length <= singlePassLimit * 2) {
+        val onePassCap = when (profile) {
+            Profile.LOCAL -> 1_600
+            Profile.CLOUD_LARGE_CONTEXT -> 4_000
+            Profile.GROQ_QWEN_FREE -> 2_200
+        }
+        val chunkCap = when (profile) {
+            Profile.LOCAL -> 1_200
+            Profile.CLOUD_LARGE_CONTEXT -> 3_000
+            Profile.GROQ_QWEN_FREE -> 1_600
+        }
+        val onePassSourceLimit = if (profile == Profile.GROQ_QWEN_FREE) {
+            singlePassLimit
+        } else {
+            singlePassLimit * 2
+        }
+        if (src.length <= onePassSourceLimit) {
             return streamCollect(Prompts.DETAILED, source(src), maxTokens = onePassCap)
         }
         val chunks = chunkTextCapped(src)
@@ -389,6 +446,13 @@ class SummarizeEngine(
         return out
     }
     companion object {
+        fun profileFor(config: ProviderConfig): Profile =
+            if (ProviderCapabilities.usesGroqQwenPolicy(config)) {
+                Profile.GROQ_QWEN_FREE
+            } else {
+                Profile.CLOUD_LARGE_CONTEXT
+            }
+
         private val WORD_REGEX = Regex("[\\p{L}\\p{N}']+")
         private val ASK_STOP_WORDS = setOf(
             "the", "and", "for", "that", "this", "with", "from", "what", "when",

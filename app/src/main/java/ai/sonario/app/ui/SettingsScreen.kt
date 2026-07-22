@@ -166,8 +166,8 @@ fun SettingsScreen(vm: SummaryViewModel, onBack: () -> Unit) {
             )
             Spacer(Modifier.height(4.dp))
             Text(
-                "Model names change over time. Default is Llama 4 Scout. If " +
-                "your provider retires it, set another from their models page.",
+                "Model IDs vary by provider. Focal defaults Groq to Qwen 3.6 27B; " +
+                    "use a model ID currently supported by your provider.",
                 color = SonarioColors.Muted,
                 style = MaterialTheme.typography.bodyMedium)
             Spacer(Modifier.height(8.dp))

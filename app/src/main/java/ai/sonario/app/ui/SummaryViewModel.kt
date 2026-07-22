@@ -18,6 +18,7 @@ import ai.sonario.app.llm.LlmProvider
 import ai.sonario.app.llm.ModelDownloader
 import ai.sonario.app.llm.ModelInfo
 import ai.sonario.app.llm.RateLimiter
+import ai.sonario.app.llm.ProviderRateLimiters
 import ai.sonario.app.source.FileTextExtractor
 import ai.sonario.app.source.SourceFetcher
 import ai.sonario.app.summarize.SummarizeEngine
@@ -71,7 +72,7 @@ data class UiState(
     // engine + cloud settings
     val engineChoice: EngineChoice = EngineChoice.ON_DEVICE,
     val groqKeySet: Boolean = false,
-    val groqModel: String = Settings.DEFAULT_GROQ_MODEL,
+    val groqModel: String = RateLimiter.GROQ_QWEN_MODEL,
     // Durable local sessions.
     val activeSessionId: String? = null,
     val recentSessions: List<SessionPreview> = emptyList(),
@@ -86,12 +87,12 @@ class SummaryViewModel(app: Application) : AndroidViewModel(app) {
     private val downloader = ModelDownloader(llm.modelsDir())
     private val settings = Settings(app)
     private val sessionStore = SessionStore(app)
-    private val rateLimiter = RateLimiter(app)
+    private val rateLimiters = ProviderRateLimiters(app)
     private val cloud = CloudEngine(
         context = app,
         apiKeyProvider = { settings.keyFor(settings.cloudProvider) },
         configProvider = { settings.configFor(settings.cloudProvider) },
-        rateLimiter = rateLimiter,
+        rateLimiterProvider = rateLimiters::forConfig,
         onRateWait = { seconds -> onRateWait(seconds) },
         onNetworkStatus = { message -> onNetworkStatus(message) },
     )
@@ -309,12 +310,13 @@ class SummaryViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Called from the Groq engine while it waits for a rate-limit slot. */
+    /** Called from the cloud engine while it waits for a provider rate-limit slot. */
     private fun onRateWait(seconds: Long) {
         _ui.value = _ui.value.copy(rateWaitSeconds = seconds)
         if (seconds > 0 && (seconds <= 5 || seconds % 10L == 0L)) {
             runCatching {
-                SummaryService.update(appCtx, "Waiting for Groq rate limit (${seconds}s)…")
+                val provider = settings.cloudProvider.displayName
+                SummaryService.update(appCtx, "Waiting for $provider rate limit (${seconds}s)…")
             }
         }
     }
@@ -327,22 +329,31 @@ class SummaryViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    private fun activeRateLimiter(): RateLimiter? =
+        rateLimiters.forConfig(settings.configFor(settings.cloudProvider))
+
     /** Tokens used today against the free-tier daily cap, for display. */
     fun groqDailyUsage(): Pair<Long, Long> {
-        val u = rateLimiter.dailyUsage()
+        val u = activeRateLimiter()?.dailyUsage() ?: return 0L to 0L
         return u.used to u.limit
     }
 
     /** Manually clear the app's daily token tally (e.g. if it drifts). */
     fun resetDailyBudget() {
-        rateLimiter.resetDaily()
+        activeRateLimiter()?.resetDaily()
         // nudge UI to re-read
         _ui.value = _ui.value.copy()
     }
 
     /** Build a human-readable estimate line and put it in the UI (Groq only). */
     private fun setEstimate(sourceText: String) {
-        val e = rateLimiter.estimate(sourceText)
+        val limiter = activeRateLimiter()
+        if (limiter == null) {
+            val tokens = formatCount((RateLimiter.estimateTokens(sourceText) * 2.4).toLong() + 5_000L)
+            _ui.value = _ui.value.copy(estimateText = "~$tokens tokens · provider-managed quota")
+            return
+        }
+        val e = limiter.estimate(sourceText)
         val tokens = formatCount(e.totalTokens)
         val eta = formatEta(e.etaSeconds)
         val line = buildString {
@@ -575,10 +586,12 @@ class SummaryViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun makeSummarizer(choice: EngineChoice): SummarizeEngine =
-        if (choice == EngineChoice.CLOUD)
-            SummarizeEngine(cloud, bigContext = true)
-        else
-            SummarizeEngine(llm, bigContext = false)
+        if (choice == EngineChoice.CLOUD) {
+            val config = settings.configFor(settings.cloudProvider)
+            SummarizeEngine(cloud, SummarizeEngine.profileFor(config))
+        } else {
+            SummarizeEngine(llm, SummarizeEngine.Profile.LOCAL)
+        }
 
     private fun validateEngine(choice: EngineChoice, model: ModelInfo): Boolean {
         val provider = settings.cloudProvider
@@ -817,7 +830,7 @@ class SummaryViewModel(app: Application) : AndroidViewModel(app) {
         val changed = key.trim() != (settings.keyFor(settings.cloudProvider) ?: "")
         settings.setKeyFor(settings.cloudProvider, key)
         // A new key has its own fresh daily budget on Groq's side.
-        if (changed) rateLimiter.resetDaily()
+        if (changed) activeRateLimiter()?.resetDaily()
         _ui.value = _ui.value.copy(groqKeySet = settings.hasKeyFor(settings.cloudProvider))
     }
 

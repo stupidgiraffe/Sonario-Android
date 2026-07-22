@@ -8,6 +8,7 @@
         <exclude domain="external" path="last_crash.txt" />
         <exclude domain="sharedpref" path="sonario_secure_keys.xml" />
         <exclude domain="sharedpref" path="rate_limiter.xml" />
+        <exclude domain="sharedpref" path="rate_limiter_groq_qwen36.xml" />
     </cloud-backup>
     <device-transfer>
         <include domain="sharedpref" path="sonario_settings.xml" />
@@ -17,5 +18,6 @@
         <exclude domain="external" path="last_crash.txt" />
         <exclude domain="sharedpref" path="sonario_secure_keys.xml" />
         <exclude domain="sharedpref" path="rate_limiter.xml" />
+        <exclude domain="sharedpref" path="rate_limiter_groq_qwen36.xml" />
     </device-transfer>
 </data-extraction-rules>

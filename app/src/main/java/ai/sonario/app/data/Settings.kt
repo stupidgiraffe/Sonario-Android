@@ -3,6 +3,7 @@ package ai.sonario.app.data
 import android.content.Context
 import ai.sonario.app.llm.LlmProvider
 import ai.sonario.app.llm.ProviderConfig
+import ai.sonario.app.llm.RateLimiter
 import ai.sonario.app.llm.SecureStorage
 
 /**
@@ -43,7 +44,11 @@ class Settings(context: Context) {
     /** Selected model per provider: key = provider id, value = model string. */
     fun modelFor(provider: LlmProvider): String {
         val fallback = provider.suggestedModels.firstOrNull() ?: ""
-        return prefs.getString("$KEY_MODEL_PREFIX${provider.id}", null) ?: fallback
+        val key = "$KEY_MODEL_PREFIX${provider.id}"
+        val stored = prefs.getString(key, null)
+        val migrated = migrateModelId(provider, stored ?: fallback)
+        if (stored != null && migrated != stored) prefs.edit().putString(key, migrated).apply()
+        return migrated
     }
 
     fun setModelFor(provider: LlmProvider, model: String) {
@@ -127,7 +132,18 @@ class Settings(context: Context) {
 
         /** @deprecated Use [Settings.modelFor] with a specific [LlmProvider]. */
         @Deprecated("Use per-provider model", ReplaceWith("modelFor(LlmProvider.GROQ)"))
-        const val DEFAULT_GROQ_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
+        const val DEFAULT_GROQ_MODEL = RateLimiter.GROQ_QWEN_MODEL
+
+        internal fun migrateModelId(provider: LlmProvider, model: String): String =
+            if (provider == LlmProvider.GROQ && model in RETIRED_GROQ_DEFAULTS) {
+                RateLimiter.GROQ_QWEN_MODEL
+            } else {
+                model
+            }
+
+        private val RETIRED_GROQ_DEFAULTS = setOf(
+            "meta-llama/llama-4-scout-17b-16e-instruct",
+        )
     }
 }
 

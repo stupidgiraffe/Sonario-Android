@@ -16,4 +16,5 @@
     <exclude domain="external" path="last_crash.txt" />
     <exclude domain="sharedpref" path="sonario_secure_keys.xml" />
     <exclude domain="sharedpref" path="rate_limiter.xml" />
+    <exclude domain="sharedpref" path="rate_limiter_groq_qwen36.xml" />
 </full-backup-content>

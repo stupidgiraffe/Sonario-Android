@@ -20,7 +20,7 @@ enum class LlmProvider(
         displayName = "Groq",
         baseUrl = "https://api.groq.com/openai/v1",
         suggestedModels = listOf(
-            "meta-llama/llama-4-scout-17b-16e-instruct",
+            "qwen/qwen3.6-27b",
             "llama-3.3-70b-versatile",
             "llama-3.1-8b-instant",
             "mixtral-8x7b-32768",

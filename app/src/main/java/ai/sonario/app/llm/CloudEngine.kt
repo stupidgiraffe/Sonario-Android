@@ -4,7 +4,11 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
@@ -41,7 +45,7 @@ class CloudEngine(
     context: Context,
     private val configProvider: () -> ProviderConfig,
     private val apiKeyProvider: () -> String?,
-    private val rateLimiter: RateLimiter? = null,
+    private val rateLimiterProvider: (ProviderConfig) -> RateLimiter? = { null },
     private val onRateWait: (Long) -> Unit = {},
     private val onNetworkStatus: (String?) -> Unit = {},
 ) : InferenceEngine {
@@ -85,18 +89,29 @@ class CloudEngine(
             val estimatedInput = RateLimiter.estimateTokens(system) +
                 RateLimiter.estimateTokens(user)
             val estimatedTotal = estimatedInput + maxTokens
-
-            rateLimiter?.awaitSlot(estimatedTotal) { seconds -> onRateWait(seconds) }
+            val rateLimiter = rateLimiterProvider(config)
+            val reservation = rateLimiter?.awaitSlot(estimatedTotal) { seconds ->
+                onRateWait(seconds)
+            }
             onRateWait(0)
 
-            val parsed = when (config.provider) {
-                LlmProvider.ANTHROPIC ->
-                    requestAnthropic(config, key, system, user, maxTokens, estimatedTotal)
-                else ->
-                    requestOpenAICompatible(config, key, system, user, maxTokens, estimatedTotal)
+            val parsed = try {
+                when (config.provider) {
+                    LlmProvider.ANTHROPIC -> requestAnthropic(
+                        config, key, system, user, maxTokens, estimatedTotal, rateLimiter,
+                    )
+                    else -> requestOpenAICompatible(
+                        config, key, system, user, maxTokens, estimatedTotal, rateLimiter,
+                    )
+                }
+            } catch (error: Throwable) {
+                if (reservation != null) rateLimiter?.cancel(reservation)
+                throw error
             }
 
-            rateLimiter?.record(parsed.usageTokens ?: estimatedTotal)
+            if (reservation != null) {
+                rateLimiter?.record(reservation, parsed.usageTokens ?: estimatedTotal)
+            }
             onNetworkStatus(null)
 
             // Preserve the InferenceEngine streaming contract while only exposing
@@ -113,6 +128,7 @@ class CloudEngine(
         user: String,
         maxTokens: Int,
         estimatedTotal: Long,
+        rateLimiter: RateLimiter?,
     ): ParsedCompletion {
         val endpoint = "${config.resolvedBaseUrl.trimEnd('/')}/chat/completions"
         val messages = JSONArray()
@@ -124,12 +140,22 @@ class CloudEngine(
             .put("temperature", config.temperature)
             .put("max_tokens", maxTokens)
             .put("stream", true)
+            .apply {
+                if (ProviderCapabilities.usesGroqQwenPolicy(config)) {
+                    put("top_p", 0.8)
+                    put("reasoning_effort", "none")
+                    put("reasoning_format", "hidden")
+                    put("stream_options", JSONObject().put("include_usage", true))
+                }
+            }
             .toString()
         return performRequest(
             endpoint = endpoint,
             payload = payload,
             estimatedTotal = estimatedTotal,
             authHeader = if (key.isNullOrBlank()) "" else "Bearer $key",
+            config = config,
+            rateLimiter = rateLimiter,
         )
     }
 
@@ -142,6 +168,7 @@ class CloudEngine(
         user: String,
         maxTokens: Int,
         estimatedTotal: Long,
+        rateLimiter: RateLimiter?,
     ): ParsedCompletion {
         val endpoint = "${config.resolvedBaseUrl.trimEnd('/')}/messages"
         val messages = JSONArray()
@@ -160,6 +187,8 @@ class CloudEngine(
             estimatedTotal = estimatedTotal,
             authHeader = if (key.isNullOrBlank()) "" else "$key",
             anthropic = true,
+            config = config,
+            rateLimiter = rateLimiter,
         )
     }
 
@@ -171,11 +200,14 @@ class CloudEngine(
         estimatedTotal: Long,
         authHeader: String,
         anthropic: Boolean = false,
+        config: ProviderConfig,
+        rateLimiter: RateLimiter?,
     ): ParsedCompletion {
         val media = "application/json; charset=utf-8".toMediaTypeOrNull()
         val deadline = System.currentTimeMillis() + NETWORK_RETRY_WINDOW_MS
         var networkAttempt = 0
         var rateAttempt = 0
+        var serverAttempt = 0
 
         requestLoop@ while (true) {
             val builder = Request.Builder()
@@ -192,14 +224,21 @@ class CloudEngine(
             }
             val request = builder.build()
 
+            val call = http.newCall(request)
+            val cancellationHandle = currentCoroutineContext()[Job]?.invokeOnCompletion { cause ->
+                if (cause is CancellationException) call.cancel()
+            }
             val response = try {
-                http.newCall(request).execute()
+                call.execute()
             } catch (error: IOException) {
+                cancellationHandle?.dispose()
+                currentCoroutineContext().ensureActive()
                 if (!isTransientNetworkError(error) || System.currentTimeMillis() >= deadline) {
                     throw RuntimeException(friendlyNetworkError(error), error)
                 }
                 networkAttempt++
                 waitForConnection(networkAttempt, deadline, error)
+                rateLimiter?.awaitRetry(onRateWait)
                 continue@requestLoop
             }
 
@@ -208,34 +247,73 @@ class CloudEngine(
             val resetHeader = response.header("x-ratelimit-reset-tokens")
                 ?: response.header("x-ratelimit-reset-requests")
             val usedHeader = response.header("x-ratelimit-used-tokens")
+            if (config.provider == LlmProvider.GROQ) {
+                val headers = GroqRateLimitHeaders.parse(response::header)
+                rateLimiter?.syncServerTokenWindow(
+                    headers.limitTokens,
+                    headers.remainingTokens,
+                    headers.resetAfterMs,
+                )
+            }
 
             val body = try {
                 response.body?.string().orEmpty()
             } catch (error: IOException) {
                 response.close()
+                currentCoroutineContext().ensureActive()
                 if (!isTransientNetworkError(error) || System.currentTimeMillis() >= deadline) {
                     throw RuntimeException(friendlyNetworkError(error), error)
                 }
                 networkAttempt++
                 waitForConnection(networkAttempt, deadline, error)
+                rateLimiter?.awaitRetry(onRateWait)
                 continue@requestLoop
             } finally {
                 response.close()
+                cancellationHandle?.dispose()
             }
 
             if (code == 429) {
+                val providerMessage = apiMessage(body)
+                if (config.provider == LlmProvider.GROQ &&
+                    GroqPolicy.isDailyLimit(providerMessage)
+                ) {
+                    throw RateLimitException(
+                        "Groq's organization-wide daily limit has been reached. " +
+                            "Focal saved completed checkpoints; resume after Groq resets it."
+                    )
+                }
                 rateAttempt++
                 if (rateAttempt > MAX_RATE_RETRIES) {
                     throw RateLimitException(friendlyError(code, body, anthropic))
                 }
-                val seconds = retrySeconds(retryAfterHeader, resetHeader, body)
-                var left = seconds.coerceIn(1L, MAX_RATE_WAIT_SECONDS)
+                val waitMs = retryWaitMillis(retryAfterHeader, resetHeader, providerMessage)
+                    .coerceIn(1_000L, MAX_RATE_WAIT_MS)
+                rateLimiter?.markServerBackoff(waitMs)
+                var left = (waitMs + 999L) / 1_000L
                 while (left > 0) {
                     onRateWait(left)
                     delay(1000)
                     left--
                 }
                 onRateWait(0)
+                rateLimiter?.awaitRetry(onRateWait)
+                continue@requestLoop
+            }
+
+            val serverWaitMs = if (code in 500..599) {
+                ServerRetryPolicy.delayMillis(serverAttempt)
+            } else {
+                null
+            }
+            if (serverWaitMs != null) {
+                serverAttempt++
+                onNetworkStatus(
+                    "${config.provider.displayName} had a temporary server error. " +
+                        "Retrying in ${serverWaitMs / 1_000L}s (attempt ${serverAttempt + 1})."
+                )
+                delay(serverWaitMs)
+                rateLimiter?.awaitRetry(onRateWait)
                 continue@requestLoop
             }
 
@@ -250,7 +328,7 @@ class CloudEngine(
             val parsed = if (anthropic) parseAnthropic(body) else parseOpenAI(body)
             if (parsed.text.isBlank()) {
                 throw RuntimeException(
-                    "${configProvider().provider.displayName} returned an empty answer. " +
+                    "${config.provider.displayName} returned an empty answer. " +
                         "Check that the selected model is available, then try again."
                 )
             }
@@ -368,24 +446,17 @@ class CloudEngine(
         }
     }
 
-    private fun retrySeconds(retryAfter: String?, reset: String?, body: String): Long {
-        retryAfter?.trim()?.toDoubleOrNull()?.let { return it.toLong().coerceAtLeast(1) }
-        parseDurationSeconds(reset)?.let { return it }
-        val bodyMessage = try {
-            JSONObject(body).optJSONObject("error")?.optString("message")
-        } catch (_: Exception) { null }
-        parseDurationSeconds(bodyMessage)?.let { return it }
-        return 60L
+    private fun apiMessage(body: String): String? = try {
+        JSONObject(body).optJSONObject("error")?.optString("message")?.trim()
+    } catch (_: Exception) {
+        null
     }
 
-    private fun parseDurationSeconds(value: String?): Long? {
-        if (value.isNullOrBlank()) return null
-        val match = DURATION_REGEX.find(value.lowercase()) ?: return null
-        val minutes = match.groups[1]?.value?.toDoubleOrNull() ?: 0.0
-        val seconds = match.groups[2]?.value?.toDoubleOrNull() ?: 0.0
-        val total = (minutes * 60.0 + seconds).toLong()
-        return total.coerceAtLeast(1)
-    }
+    private fun retryWaitMillis(retryAfter: String?, reset: String?, message: String?): Long =
+        RetryDelayParser.retryAfterMillis(retryAfter)
+            ?: RetryDelayParser.durationMillis(reset)
+            ?: RetryDelayParser.durationMillis(message)
+            ?: 60_000L
 
     private suspend fun waitForConnection(
         attempt: Int,
@@ -482,8 +553,7 @@ class CloudEngine(
         private const val NETWORK_RETRY_WINDOW_MS = 10L * 60L * 1000L
         private const val NETWORK_POLL_MS = 2_000L
         private const val MAX_RATE_RETRIES = 8
-        private const val MAX_RATE_WAIT_SECONDS = 10L * 60L
+        private const val MAX_RATE_WAIT_MS = 10L * 60L * 1_000L
         private const val ANTHROPIC_VERSION = "2023-06-01"
-        private val DURATION_REGEX = Regex("(?:(\\d+(?:\\.\\d+)?)m)?\\s*(\\d+(?:\\.\\d+)?)s")
     }
 }
