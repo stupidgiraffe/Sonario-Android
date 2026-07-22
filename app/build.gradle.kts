@@ -4,6 +4,23 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+val releaseKeystorePath = providers.environmentVariable("FOCAL_RELEASE_KEYSTORE_PATH").orNull
+val releaseKeyAlias = providers.environmentVariable("FOCAL_RELEASE_KEY_ALIAS").orNull
+val releaseStorePassword = providers.environmentVariable("FOCAL_RELEASE_STORE_PASSWORD").orNull
+val releaseKeyPassword = providers.environmentVariable("FOCAL_RELEASE_KEY_PASSWORD").orNull
+val releaseSigningValues = listOf(
+    releaseKeystorePath,
+    releaseKeyAlias,
+    releaseStorePassword,
+    releaseKeyPassword,
+)
+val releaseSigningConfigured = releaseSigningValues.all { !it.isNullOrBlank() }
+if (!releaseSigningConfigured && releaseSigningValues.any { !it.isNullOrBlank() }) {
+    throw GradleException(
+        "Release signing is only enabled when all FOCAL_RELEASE_* variables are set."
+    )
+}
+
 kotlin {
     compilerOptions {
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
@@ -24,6 +41,17 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        if (releaseSigningConfigured) {
+            create("release") {
+                storeFile = file(releaseKeystorePath!!)
+                keyAlias = releaseKeyAlias
+                storePassword = releaseStorePassword
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
@@ -32,6 +60,7 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            signingConfig = signingConfigs.findByName("release")
         }
     }
 
@@ -51,6 +80,18 @@ android {
     lint {
         abortOnError = true
         checkReleaseBuilds = true
+    }
+}
+
+tasks.register("verifyReleaseTag") {
+    group = "verification"
+    description = "Fails unless -Pfocal.releaseTag matches the configured versionName."
+    doLast {
+        val tag = providers.gradleProperty("focal.releaseTag").orNull
+            ?: throw GradleException("Pass -Pfocal.releaseTag=v<versionName>.")
+        val expected = "v${android.defaultConfig.versionName}"
+        check(tag == expected) { "Release tag '$tag' does not match '$expected'." }
+        println("Release tag $tag matches ${android.defaultConfig.versionName}.")
     }
 }
 
