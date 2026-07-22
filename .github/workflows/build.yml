@@ -37,7 +37,20 @@ jobs:
         run: chmod +x gradlew
 
       - name: Build debug APK
-        run: ./gradlew clean assembleDebug --stacktrace --no-daemon
+        shell: bash
+        run: |
+          mkdir -p build-logs
+          set -o pipefail
+          ./gradlew clean assembleDebug --stacktrace --no-daemon 2>&1 | tee build-logs/gradle.log
+
+      - name: Upload diagnostic log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: focal-gradle-log
+          path: build-logs/gradle.log
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Upload APK as artifact
         if: success()
