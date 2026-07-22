@@ -1,11 +1,22 @@
-name: Build APK (Manual)
+name: Focal Diagnostic APK
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - build/focal-debug-repair
+
+permissions:
+  contents: read
+
+concurrency:
+  group: focal-debug-repair
+  cancel-in-progress: true
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
@@ -25,11 +36,13 @@ jobs:
         run: chmod +x gradlew
 
       - name: Build debug APK
-        run: ./gradlew assembleDebug --no-daemon
+        run: ./gradlew clean assembleDebug --stacktrace --no-daemon
 
       - name: Upload APK as artifact
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: focal-debug-apk
           path: app/build/outputs/apk/debug/*.apk
-          retention-days: 90
+          if-no-files-found: error
+          retention-days: 14
