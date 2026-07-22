@@ -1,27 +1,32 @@
-# Contributing
+# Contributing to Focal
 
-Thanks for helping improve Sonario.
+Focal is an independent MIT-licensed fork. Keep upstream attribution intact and
+do not describe the project as maintained by Sonario's original author.
 
-## Before opening an issue
+## Development baseline
 
-- Confirm the issue occurs on the newest version.
-- For YouTube failures, include the full extractor diagnostics shown by Sonario,
-  the link shape used, and whether the video is public and captioned. Do not post
-  private videos, cookies, or API keys.
-- For Groq failures, include the HTTP status or displayed error, but redact the
-  API key.
-- For Android lifecycle/background problems, include the phone model, Android
-  version, battery-optimization setting, and approximate time before failure.
+1. Use JDK 17, Android SDK Platform 36, and Build Tools 35.0.0.
+2. Use the tracked `./gradlew`; do not replace or bypass wrapper checksum checks.
+3. Run `./gradlew test lint assembleDebug --stacktrace --no-daemon`.
+4. For release-sensitive changes, also run `./gradlew assembleRelease`.
 
-## Development
+## Change requirements
 
-1. Use JDK 17 and Android SDK 36.
-2. Open the repository root in Android Studio and let Gradle sync.
-3. Build with `./gradlew assembleDebug` or **Build > Build APK(s)**.
-4. Keep credentials and signing keys outside the repository.
-5. Test both Groq and on-device paths when changing shared summarization code.
+- Map callers, persistence, UI, tests, and release effects before changing a
+  provider, migration, downloader, or session schema.
+- Keep provider IDs stable and credentials/models provider-scoped.
+- Never add silent provider fallback.
+- Add deterministic tests for parser, protocol, migration, queue, or downloader
+  behavior at the lowest effective level.
+- Explain user-visible changes and any migration or privacy impact in the PR.
+- Do not commit generated APK/AAB files, GGUF files, `local.properties`, IDE
+  state, `.serena/`, credentials, keystores, or passwords.
 
-## Pull requests
+## Reports
 
-Keep changes focused and explain the user-visible behavior. Include reproduction
-steps for bug fixes and note any migration or session-storage implications.
+Include reproducible steps, Focal version, device/API level, and non-sensitive
+diagnostics. Remove API keys, cookies, private source text, provider response
+bodies, and personal URLs. For cloud issues, name the selected provider/model;
+for local inference, name the exact GGUF and device architecture.
+
+See [SECURITY.md](SECURITY.md) for reporting a vulnerability privately.

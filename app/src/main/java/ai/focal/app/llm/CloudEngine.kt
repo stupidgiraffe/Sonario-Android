@@ -30,7 +30,7 @@ import kotlin.math.min
  * Cloud inference through any OpenAI-compatible chat-completions API, with
  * native Anthropic Messages API support.
  *
- * Replaces the old Groq-only [GroqEngine]. Supports:
+ * Replaces the old Groq-only engine. Supports:
  *   - Groq, OpenAI, OpenRouter, Together, Fireworks, etc. (OpenAI wire format)
  *   - Anthropic (Claude) via its native Messages API
  *   - Ollama and other local servers (OpenAI-compatible)

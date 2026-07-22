@@ -19,7 +19,7 @@ import androidx.core.app.NotificationCompat
  *
  * The partial wake lock keeps the CPU available, and the Wi-Fi lock prevents the
  * radio from entering its deepest sleep state during an active cloud summary.
- * GroqEngine still performs network-aware retries because Android may switch from
+ * CloudEngine still performs network-aware retries because Android may switch from
  * Wi-Fi to mobile data or briefly lose DNS even while this service is active.
  */
 class SummaryService : Service() {

@@ -1,5 +1,9 @@
 # Focal Phase 0 Baseline
 
+> Historical evidence: this file intentionally records the pre-integration
+> baseline. Current toolchain, identity, tests, workflows, and release risks are
+> documented in the other Focal 1.0.0 documents and release-readiness report.
+
 Verified on 2026-07-23. This report records the repaired branch before any
 upstream integration, package migration, or provider refactoring.
 

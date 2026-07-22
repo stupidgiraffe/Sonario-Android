@@ -1,110 +1,70 @@
-# Sonario for Android
+# Focal for Android
 
-Summarize YouTube videos, web articles, and pasted text on your phone. Paste a
-link (or share one into the app) and get skimmable notes, a detailed prose view,
-or a bulleted outline — powered by the AI provider **you** choose.
+Focal summarizes pasted text, YouTube transcripts, web articles, and local
+documents on Android. It can use a downloaded GGUF model on-device or a
+bring-your-own-key cloud provider.
 
-## What's new in 1.4.0
+Focal is an independent fork of
+[pgotta/Sonario-Android](https://github.com/pgotta/Sonario-Android). It is not
+an official continuation maintained by Sonario's original author. The upstream
+MIT copyright and license are preserved in [LICENSE](LICENSE) and [NOTICE](NOTICE).
 
-Sonario is now a **bring-your-own-key (BYOK) multi-provider** app:
+## Focal 1.0.0 release-candidate scope
 
-- **Any provider** — Groq, OpenAI, Anthropic (Claude), Ollama, or any
-  OpenAI-compatible proxy — from one settings screen.
-- **Hardware-backed key storage** — your API keys are encrypted with an
-  AES-256-GCM key in the Android Keystore. They never leave the device except
-  in the `Authorization` header of requests **you** initiate.
-- **Per-provider model + base URL + temperature** — pick the model, set a
-  custom endpoint (self-hosted, proxy, local Ollama), and tune randomness.
-- **On-device still included** — run a GGUF model locally for full privacy.
+- Application ID and namespace: `ai.focal.app`
+- Minimum Android API: 28; target and compile API: 36
+- Architectures packaged: `arm64-v8a`
+- Cloud providers: Groq, OpenAI, native Anthropic, Ollama, and custom
+  OpenAI-compatible endpoints
+- Local models: Qwen3 4B Instruct 2507, Gemma 3n E4B Instruct, and LFM2 2.6B
+- Durable provider-aware sessions and resumable summarization checkpoints
+- TXT, Markdown, and PDF export through Android's Storage Access Framework
 
-See [CHANGELOG.md](CHANGELOG.md) for the full list and [docs/BYOK.md](docs/BYOK.md)
-for setup instructions.
+Local model compatibility and end-to-end cloud calls still require physical
+device and owner-credential validation. The final evidence is recorded in
+`docs/RELEASE_READINESS_1.0.0.md`; the build passing alone is not presented as
+device validation.
 
-## Features
+## Privacy and credentials
 
-- **YouTube transcripts** — multi-route extraction (get_transcript, Android
-  player, WEB player, watch-page captions) with consent handling.
-- **Web articles** — fetched and cleaned with Jsoup.
-- **Local files** — PDF, EPUB, DOCX, TXT, MD via the system file picker.
-- **Three summary views** — Normal (skimmable Markdown), Detailed (prose),
-  Bullets (outline), plus per-chapter for EPUBs.
-- **Ask** — question-answering grounded in the source with `[n]` citations.
-- **Resumable** — summaries checkpoint after each section; kill the app and
-  resume without re-spending tokens.
-- **Export** — TXT, Markdown, or PDF via the Storage Access Framework.
-- **On-device** — runs a GGUF model via Llamatik (llama.cpp) with no NDK.
+Cloud summarization sends the source and prompts to the provider selected by the
+user. Focal does not silently switch providers. API keys are scoped per provider,
+encrypted with AES-256-GCM using a key in Android Keystore, excluded from Android
+backup/transfer, and never stored in saved sessions. Keystore hardware backing is
+device-dependent and is not assumed.
 
-## Getting started
+Remote endpoints must use HTTPS. Cleartext HTTP is allowed only for exact device
+loopback hosts (`localhost`, `127.0.0.1`, and `::1`) for a service running on the
+same Android device.
 
-1. Clone the repo and open in Android Studio (Hedgehog or newer).
-2. Run on a device or emulator (API 28+).
-3. On first launch, choose:
-   - **Cloud** — pick a provider, paste your API key, pick a model.
-   - **On-device** — download a GGUF model (1–2 GB, use Wi-Fi).
+See [docs/PROVIDERS.md](docs/PROVIDERS.md), [docs/BYOK.md](docs/BYOK.md), and
+[SECURITY.md](SECURITY.md).
 
-## BYOK setup
+## Build and verify
 
-Each provider needs an API key. Get one, then paste it in
-**Settings → Providers**.
-
-| Provider  | Free tier | Key location |
-|-----------|-----------|--------------|
-| Groq      | ✅        | console.groq.com |
-| OpenAI    | —         | platform.openai.com/api-keys |
-| Anthropic | —         | console.anthropic.com |
-| Ollama    | ✅ (local) | no key needed |
-| Custom    | —         | your proxy |
-
-See [docs/BYOK.md](docs/BYOK.md) for step-by-step instructions.
-
-## Build
+Requirements: JDK 17, Android SDK Platform 36, and Build Tools 35.0.0. The
+tracked wrapper downloads Gradle 8.13 and verifies its distribution checksum.
 
 ```bash
-./gradlew assembleDebug
+./gradlew test lint assembleDebug assembleRelease --stacktrace --no-daemon
 ```
 
-See [BUILD.md](BUILD.md) for details.
+The release APK is unsigned unless all four documented `FOCAL_RELEASE_*`
+environment variables are provided. No keystore or password belongs in Git.
+See [docs/BUILDING.md](docs/BUILDING.md) and
+[docs/RELEASING.md](docs/RELEASING.md).
 
-## Architecture
+## Project documentation
 
-```
-┌──────────────────────────────────────────────────────────┐
-│  UI (Jetpack Compose, Material 3)                         │
-│  SummaryScreen · SetupScreen · SettingsScreen · Models   │
-└────────────────────────┬─────────────────────────────────┘
-                         │
-┌────────────────────────▼─────────────────────────────────┐
-│  SummaryViewModel                                        │
-│  (engine selection, session state, progress)             │
-└──────┬───────────────────────────────┬───────────────────┘
-       │                               │
-┌──────▼────────┐            ┌─────────▼──────────────────┐
-│  LlmEngine    │            │  CloudEngine               │
-│  (on-device)  │            │  (Groq/OpenAI/Anthropic/   │
-│  Llamatik /   │            │   Ollama / Custom)         │
-│  llama.cpp    │            │  ↳ SecureStorage (keys)    │
-└───────────────┘            └────────────────────────────┘
-       │                               │
-┌──────▼───────────────────────────────▼──────────────────┐
-│  SummarizeEngine (map-reduce, chunk, condense, derive)   │
-└─────────────────────────────────────────────────────────┘
-```
-
-- **`InferenceEngine`** — small interface; `LlmEngine` (on-device) and
-  `CloudEngine` (any provider) both implement it.
-- **`CloudEngine`** — one implementation, many providers. Reads
-  `ProviderConfig` (model, base URL, temperature) and the API key from
-  `SecureStorage`.
-- **`SecureStorage`** — AES-256-GCM via Android Keystore. Keys never stored
-  in plaintext.
-- **`SessionStore`** — durable, resumable sessions on disk.
-- **`SourceFetcher`** — YouTube (multi-route), web articles, pasted text.
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md). Bug reports and feature requests go
-through the templates in `.github/ISSUE_TEMPLATE/`.
+- [Architecture](docs/ARCHITECTURE.md)
+- [Providers and endpoint policy](docs/PROVIDERS.md)
+- [Local models and download integrity](docs/MODELS.md)
+- [Persistence and migrations](docs/MIGRATIONS.md)
+- [Verified repair baseline](docs/BASELINE.md)
+- [Upstream parity decisions](docs/UPSTREAM_PARITY.md)
+- [Changelog](CHANGELOG.md)
+- [Contributing](CONTRIBUTING.md)
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE) and [NOTICE](NOTICE).

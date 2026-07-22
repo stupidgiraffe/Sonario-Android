@@ -9,7 +9,7 @@ import ai.focal.app.llm.SecureStorage
 /**
  * Per-provider settings, backed by SharedPreferences.
  *
- * API keys are stored in [SecureStorage] (hardware-backed encryption),
+ * API keys are stored with Android Keystore-backed encryption in [SecureStorage],
  * not here. This class holds only the non-secret configuration: which
  * provider is active, which model, the custom base URL, temperature, etc.
  *

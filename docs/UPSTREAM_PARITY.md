@@ -1,5 +1,10 @@
 # Upstream 1.5.0 Parity Record
 
+> Historical planning record: the observations below describe the repaired
+> baseline before selective integration. The accepted downloader, catalog,
+> backup, queue, migration, and build work is now implemented and tested on
+> `integration/focal-1.0.0`; device-only claims remain explicitly unverified.
+
 ## Scope and evidence
 
 This record compares three immutable points:

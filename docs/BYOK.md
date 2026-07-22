@@ -1,83 +1,32 @@
-# Bring Your Own Key (BYOK) — Setup Guide
+# Bring your own key
 
-Sonario lets you choose which AI provider powers your summaries. To use a
-cloud provider, you need an API key. This guide walks through getting one
-and adding it to the app securely.
+Open **Settings → Providers**, select a provider, choose or enter its model, and
+save that provider's key. Groq, OpenAI, and Anthropic require a key. Ollama and
+Custom accept an optional key because self-hosted servers vary.
 
-## Supported providers
+Keys are independent per provider. Switching providers does not copy a key,
+model, or endpoint. A running request captures its selected configuration and
+Focal does not silently fall back to another provider.
 
-| Provider  | Type | Free tier | Key needed |
-|-----------|------|-----------|------------|
-| Groq      | Cloud | ✅ ~500k tok/day | Yes |
-| OpenAI    | Cloud | — | Yes |
-| Anthropic | Cloud | — | Yes |
-| Ollama    | Local | ✅ (your hardware) | No |
-| Custom    | Cloud | — | Maybe |
+## Storage
 
-## Getting an API key
+Focal encrypts keys with AES-256-GCM using a key in Android Keystore. The
+encrypted value is stored in private SharedPreferences; plaintext is held only
+in memory while building an authorized request. Keystore hardware backing varies
+by device. If encryption or persistence fails, Focal reports the failure and
+does not store a Base64/plaintext fallback.
 
-### Groq (recommended for free tier)
+Credentials are excluded from Android cloud backup and device transfer, are not
+included in saved sessions, and are redacted from user-visible failure/crash
+text. Clearing app data or uninstalling deletes the stored credentials.
 
-1. Go to [console.groq.com](https://console.groq.com) and sign in.
-2. Navigate to **API Keys** → **Create API Key**.
-3. Copy the key (starts with `gsk_`).
-4. In Sonario: **Settings → Providers → Groq → API key → paste → Save key**.
+## Endpoint rules
 
-### OpenAI
+- Built-in Groq, OpenAI, and Anthropic endpoints use HTTPS.
+- Remote custom endpoints must use HTTPS and cannot contain URL user-info, query
+  parameters, or fragments.
+- Cleartext HTTP is accepted only for `localhost`, `127.0.0.1`, or `::1`, meaning
+  a service on the same Android device. A computer's LAN IP over HTTP is rejected;
+  expose it through a correctly configured HTTPS endpoint instead.
 
-1. Go to [platform.openai.com/api-keys](https://platform.openai.com/api-keys).
-2. Click **Create new secret key**.
-3. Copy the key (starts with `sk-`).
-4. In Sonario: **Settings → Providers → OpenAI → API key → paste → Save key**.
-
-### Anthropic
-
-1. Go to [console.anthropic.com](https://console.anthropic.com).
-2. Navigate to **API Keys** → **Create Key**.
-3. Copy the key (starts with `sk-ant-`).
-4. In Sonario: **Settings → Providers → Anthropic → API key → paste → Save key**.
-
-### Ollama (local, no key)
-
-1. Install Ollama on your computer: [ollama.com](https://ollama.com).
-2. Pull a model: `ollama pull llama3.2`.
-3. Start the server: `ollama serve` (listens on `localhost:11434`).
-4. In Sonario: **Settings → Providers → Ollama → set base URL** to
-   `http://<your-computer-ip>:11434/v1`.
-5. Pick a model and save.
-
-### Custom (OpenAI-compatible proxy)
-
-1. Get the base URL and API key from your proxy provider.
-2. In Sonario: **Settings → Providers → Custom → set base URL**.
-3. Paste the key if the proxy requires one.
-4. Pick a model name (must match what the proxy expects).
-
-## How your key is stored
-
-Sonario encrypts your API key with **AES-256-GCM** using a key that lives in
-the **Android Keystore** (hardware-backed on most devices). The encrypted
-blob is stored in SharedPreferences; the plaintext key is never written to
-disk. When you summarize, the key is decrypted in memory and sent only in
-the `Authorization` (or `x-api-key` for Anthropic) header of requests you
-initiate.
-
-If the device has no hardware-backed keystore, Sonario falls back to
-Base64 obfuscation and logs a warning.
-
-## Security notes
-
-- Your key is **never** sent to Sonario's developers or any third party.
-- Your key is **never** included in crash reports.
-- Removing the app or clearing its data **permanently deletes** all stored keys.
-- You can clear a key at any time in **Settings → Providers**.
-
-## Troubleshooting
-
-| Problem | Fix |
-|---------|-----|
-| "rejected the API key" | Re-copy the key; make sure it's complete. |
-| "model was not found" | Pick a model the provider currently offers. |
-| "connection timed out" | Check Wi-Fi / mobile data. |
-| "rate limit is still active" | Wait a minute; the free tier resets. |
-| Ollama not reachable | Verify the server is running and the IP is correct. |
+See [PROVIDERS.md](PROVIDERS.md) for wire formats and model persistence.
