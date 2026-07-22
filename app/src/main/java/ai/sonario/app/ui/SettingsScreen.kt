@@ -18,8 +18,11 @@ import androidx.compose.ui.unit.dp
 import ai.sonario.app.data.EngineChoice
 
 /**
- * Settings: choose the engine and, for the Groq cloud engine, paste an API key
- * and set the model string. The key is stored locally on the device only.
+ * Settings: choose the engine (on-device vs cloud), and for cloud mode
+ * paste a Groq API key and set the model string.
+ *
+ * API keys are stored in hardware-backed encrypted storage (SecureStorage)
+ * and never displayed in full — only a masked preview is shown.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -61,25 +64,42 @@ fun SettingsScreen(vm: SummaryViewModel, onBack: () -> Unit) {
                 onClick = { vm.setEngine(EngineChoice.ON_DEVICE) },
             )
             EngineOption(
-                title = "Groq (cloud)",
-                subtitle = "Fast. Sends your text to Groq's servers to summarize. " +
-                        "Needs a free API key below.",
-                selected = ui.engineChoice == EngineChoice.GROQ,
-                onClick = { vm.setEngine(EngineChoice.GROQ) },
+                title = "Cloud (BYOK)",
+                subtitle = "Fast. Sends your text to the provider of your choice. " +
+                        "Needs an API key.",
+                selected = ui.engineChoice == EngineChoice.CLOUD,
+                onClick = { vm.setEngine(EngineChoice.CLOUD) },
             )
 
             Spacer(Modifier.height(20.dp))
             HorizontalDivider(color = SonarioColors.RuleSoft)
             Spacer(Modifier.height(20.dp))
 
-            // Groq settings
-            Text("Groq cloud", color = SonarioColors.InkSoft,
+            // Cloud / BYOK settings
+            Text("Cloud provider", color = SonarioColors.InkSoft,
                 style = MaterialTheme.typography.labelLarge)
             Spacer(Modifier.height(6.dp))
             Text(
-                "Get a free API key at console.groq.com (no credit card). Create a " +
-                "key, then paste it here. Your key is stored only on this device " +
-                "and is sent solely to Groq when you summarize.",
+                "Select a cloud provider. Your API key is stored encrypted " +
+                "on this device and sent only when you summarize.",
+                color = SonarioColors.Muted,
+                style = MaterialTheme.typography.bodyMedium)
+            Spacer(Modifier.height(12.dp))
+
+            // Provider quick-pick row
+            // TODO: wire per-provider config UI when multi-provider ViewModel lands
+
+            Spacer(Modifier.height(20.dp))
+            HorizontalDivider(color = SonarioColors.RuleSoft)
+            Spacer(Modifier.height(20.dp))
+
+            // API key
+            Text("API key", color = SonarioColors.InkSoft,
+                style = MaterialTheme.typography.labelLarge)
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "Paste your cloud provider API key. It's stored encrypted " +
+                "and only used when you summarize.",
                 color = SonarioColors.Muted,
                 style = MaterialTheme.typography.bodyMedium)
             Spacer(Modifier.height(12.dp))
@@ -98,8 +118,7 @@ fun SettingsScreen(vm: SummaryViewModel, onBack: () -> Unit) {
                     color = if (pct < 15) SonarioColors.Teal else SonarioColors.Muted,
                     style = MaterialTheme.typography.bodyMedium)
                 Text(
-                    "Counts usage through this app only; resets daily. Groq's free " +
-                    "tier is about ${fmtK(limit)} tokens/day.",
+                    "Usage counted by this app only; resets daily.",
                     color = SonarioColors.Muted,
                     style = MaterialTheme.typography.bodySmall)
                 Spacer(Modifier.height(4.dp))
@@ -112,7 +131,7 @@ fun SettingsScreen(vm: SummaryViewModel, onBack: () -> Unit) {
             OutlinedTextField(
                 value = keyInput,
                 onValueChange = { keyInput = it },
-                placeholder = { Text("gsk_...") },
+                placeholder = { Text("gsk_... / sk-...") },
                 label = { Text(if (ui.groqKeySet) "Replace API key" else "API key") },
                 singleLine = true,
                 visualTransformation = PasswordVisualTransformation(),
@@ -139,7 +158,7 @@ fun SettingsScreen(vm: SummaryViewModel, onBack: () -> Unit) {
             OutlinedTextField(
                 value = modelInput,
                 onValueChange = { modelInput = it },
-                label = { Text("Groq model") },
+                label = { Text("Model") },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                 modifier = Modifier.fillMaxWidth(),
@@ -147,8 +166,8 @@ fun SettingsScreen(vm: SummaryViewModel, onBack: () -> Unit) {
             )
             Spacer(Modifier.height(4.dp))
             Text(
-                "Model names change over time. Default is Llama 4 Scout. If Groq " +
-                "retires it, set another from console.groq.com/docs/models.",
+                "Model names change over time. Default is Llama 4 Scout. If " +
+                "your provider retires it, set another from their models page.",
                 color = SonarioColors.Muted,
                 style = MaterialTheme.typography.bodyMedium)
             Spacer(Modifier.height(8.dp))
@@ -162,7 +181,7 @@ fun SettingsScreen(vm: SummaryViewModel, onBack: () -> Unit) {
             HorizontalDivider(color = SonarioColors.RuleSoft)
             Spacer(Modifier.height(12.dp))
             Text(
-                "Sonario 1.3.3 • keyboard-safe Ask field",
+                "Focal 1.4.0 • BYOK multi-provider beta",
                 color = SonarioColors.Muted,
                 style = MaterialTheme.typography.bodySmall,
             )
@@ -201,7 +220,6 @@ private fun EngineOption(
         }
     }
 }
-
 
 /** Compact token count: 480000 -> "480K", 1200000 -> "1.2M". */
 private fun fmtK(n: Long): String = when {

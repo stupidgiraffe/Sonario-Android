@@ -12,8 +12,9 @@ import ai.sonario.app.data.SessionStore
 import ai.sonario.app.data.StoredQa
 import ai.sonario.app.data.SummarySession
 import ai.sonario.app.llm.BUNDLED_MODELS
-import ai.sonario.app.llm.GroqEngine
+import ai.sonario.app.llm.CloudEngine
 import ai.sonario.app.llm.LlmEngine
+import ai.sonario.app.llm.LlmProvider
 import ai.sonario.app.llm.ModelDownloader
 import ai.sonario.app.llm.ModelInfo
 import ai.sonario.app.llm.RateLimiter
@@ -86,10 +87,10 @@ class SummaryViewModel(app: Application) : AndroidViewModel(app) {
     private val settings = Settings(app)
     private val sessionStore = SessionStore(app)
     private val rateLimiter = RateLimiter(app)
-    private val groq = GroqEngine(
+    private val cloud = CloudEngine(
         context = app,
-        apiKeyProvider = { settings.groqApiKey },
-        modelProvider = { settings.groqModel },
+        apiKeyProvider = { settings.keyFor(settings.cloudProvider) },
+        configProvider = { settings.configFor(settings.cloudProvider) },
         rateLimiter = rateLimiter,
         onRateWait = { seconds -> onRateWait(seconds) },
         onNetworkStatus = { message -> onNetworkStatus(message) },
@@ -229,7 +230,8 @@ class SummaryViewModel(app: Application) : AndroidViewModel(app) {
             kind = "Document",
             engineChoice = state.engineChoice,
             modelFileName = model.fileName,
-            groqModel = state.groqModel,
+            cloudProviderId = settings.cloudProvider.id,
+            cloudModel = settings.modelFor(settings.cloudProvider),
             phase = "reading file",
         ))
         prepareUiForSession(session)
@@ -408,6 +410,7 @@ class SummaryViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun applySession(session: SummarySession, restoredAtLaunch: Boolean = false) {
+        val sessionProvider = LlmProvider.fromId(session.cloudProviderId)
         val models = llm.availableModels()
         val chosenModel = models.firstOrNull { it.fileName == session.modelFileName }
             ?: _ui.value.model
@@ -426,8 +429,11 @@ class SummaryViewModel(app: Application) : AndroidViewModel(app) {
         }
 
         settings.engine = session.engineChoice
-        if (session.engineChoice == EngineChoice.GROQ && session.groqModel.isNotBlank()) {
-            settings.groqModel = session.groqModel
+        if (session.engineChoice == EngineChoice.CLOUD) {
+            settings.cloudProvider = sessionProvider
+            if (session.cloudModel.isNotBlank()) {
+                settings.setModelFor(sessionProvider, session.cloudModel)
+            }
         }
         lastSourceText = session.sourceText
         lastSummarizer = if (session.sourceText.isNotBlank()) {
@@ -459,7 +465,7 @@ class SummaryViewModel(app: Application) : AndroidViewModel(app) {
             models = models,
             hasAnyModel = models.any { it.present },
             engineChoice = session.engineChoice,
-            groqModel = session.groqModel,
+            groqModel = session.cloudModel.ifBlank { settings.modelFor(sessionProvider) },
             activeSessionId = session.id,
             resumeAvailable = canResume && processSummaryJob?.isActive != true,
             sessionNotice = notice,
@@ -535,6 +541,13 @@ class SummaryViewModel(app: Application) : AndroidViewModel(app) {
                     error = "This session stopped before the source was saved, so it cannot be resumed.")
                 return@launch
             }
+            val sessionProvider = LlmProvider.fromId(loaded.cloudProviderId)
+            if (loaded.engineChoice == EngineChoice.CLOUD) {
+                settings.cloudProvider = sessionProvider
+                if (loaded.cloudModel.isNotBlank()) {
+                    settings.setModelFor(sessionProvider, loaded.cloudModel)
+                }
+            }
             if (!validateEngine(loaded.engineChoice, modelFor(loaded))) return@launch
 
             val session = sessionStore.save(loaded.copy(
@@ -543,9 +556,6 @@ class SummaryViewModel(app: Application) : AndroidViewModel(app) {
                 phase = loaded.phase.ifBlank { "resuming" },
             ))
             settings.engine = session.engineChoice
-            if (session.engineChoice == EngineChoice.GROQ) {
-                settings.groqModel = session.groqModel
-            }
             val summarizer = makeSummarizer(session.engineChoice)
             val model = modelFor(session)
             attachProgress(summarizer)
@@ -566,15 +576,16 @@ class SummaryViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun makeSummarizer(choice: EngineChoice): SummarizeEngine =
-        if (choice == EngineChoice.GROQ)
-            SummarizeEngine(groq, bigContext = true)
+        if (choice == EngineChoice.CLOUD)
+            SummarizeEngine(cloud, bigContext = true)
         else
             SummarizeEngine(llm, bigContext = false)
 
     private fun validateEngine(choice: EngineChoice, model: ModelInfo): Boolean {
-        if (choice == EngineChoice.GROQ && !settings.hasGroqKey) {
+        val provider = settings.cloudProvider
+        if (choice == EngineChoice.CLOUD && provider.needsKey && !settings.hasKeyFor(provider)) {
             _ui.value = _ui.value.copy(
-                error = "This session used Groq, but no Groq API key is currently set.")
+                error = "This session uses ${provider.displayName}, but no API key is currently set.")
             return false
         }
         if (choice == EngineChoice.ON_DEVICE && !llm.isModelPresent(model)) {
@@ -614,7 +625,7 @@ class SummaryViewModel(app: Application) : AndroidViewModel(app) {
             askError = null,
             qaHistory = session.qaHistory.map { QaPair(it.question, it.answer) },
             engineChoice = session.engineChoice,
-            groqModel = session.groqModel,
+            groqModel = session.cloudModel.ifBlank { settings.modelFor(settings.cloudProvider) },
             activeSessionId = session.id,
             resumeAvailable = false,
             sessionNotice = notice,
@@ -629,7 +640,7 @@ class SummaryViewModel(app: Application) : AndroidViewModel(app) {
     ) {
         var session = initial
         try {
-            if (session.engineChoice == EngineChoice.GROQ) {
+            if (session.engineChoice == EngineChoice.CLOUD) {
                 val cp = session.checkpoint
                 val hasSavedWork = cp.notes.isNotEmpty() || cp.normal.isNotBlank() ||
                     cp.bullets.isNotBlank() || cp.detailed.isNotBlank() ||
@@ -770,8 +781,8 @@ class SummaryViewModel(app: Application) : AndroidViewModel(app) {
             hasAnyModel = present != null,
             model = present ?: models.first(),
             engineChoice = settings.engine,
-            groqKeySet = settings.hasGroqKey,
-            groqModel = settings.groqModel,
+            groqKeySet = settings.hasKeyFor(settings.cloudProvider),
+            groqModel = settings.modelFor(settings.cloudProvider),
         )
     }
 
@@ -804,20 +815,20 @@ class SummaryViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun setGroqKey(key: String) {
-        val changed = key.trim() != (settings.groqApiKey ?: "")
-        settings.groqApiKey = key
+        val changed = key.trim() != (settings.keyFor(settings.cloudProvider) ?: "")
+        settings.setKeyFor(settings.cloudProvider, key)
         // A new key has its own fresh daily budget on Groq's side.
         if (changed) rateLimiter.resetDaily()
-        _ui.value = _ui.value.copy(groqKeySet = settings.hasGroqKey)
+        _ui.value = _ui.value.copy(groqKeySet = settings.hasKeyFor(settings.cloudProvider))
     }
 
     fun setGroqModel(model: String) {
-        settings.groqModel = model
-        _ui.value = _ui.value.copy(groqModel = settings.groqModel)
+        settings.setModelFor(settings.cloudProvider, model)
+        _ui.value = _ui.value.copy(groqModel = settings.modelFor(settings.cloudProvider))
     }
 
     fun currentGroqKeyMasked(): String {
-        val k = settings.groqApiKey ?: return ""
+        val k = settings.keyFor(settings.cloudProvider) ?: return ""
         return if (k.length <= 8) "••••" else k.take(4) + "…" + k.takeLast(4)
     }
 
@@ -876,7 +887,8 @@ class SummaryViewModel(app: Application) : AndroidViewModel(app) {
             kind = "Source",
             engineChoice = state.engineChoice,
             modelFileName = model.fileName,
-            groqModel = state.groqModel,
+            cloudProviderId = settings.cloudProvider.id,
+            cloudModel = settings.modelFor(settings.cloudProvider),
             phase = "fetching",
         ))
         prepareUiForSession(session)
