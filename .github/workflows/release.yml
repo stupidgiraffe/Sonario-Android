@@ -1,0 +1,87 @@
+name: Tagged release APK
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: focal-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  signed-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate Gradle wrapper
+        uses: gradle/actions/wrapper-validation@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: temurin
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android API 36
+        run: sdkmanager "platforms;android-36" "build-tools;35.0.0"
+
+      - name: Require complete signing inputs
+        env:
+          FOCAL_RELEASE_KEYSTORE_BASE64: ${{ secrets.FOCAL_RELEASE_KEYSTORE_BASE64 }}
+          FOCAL_RELEASE_KEY_ALIAS: ${{ secrets.FOCAL_RELEASE_KEY_ALIAS }}
+          FOCAL_RELEASE_STORE_PASSWORD: ${{ secrets.FOCAL_RELEASE_STORE_PASSWORD }}
+          FOCAL_RELEASE_KEY_PASSWORD: ${{ secrets.FOCAL_RELEASE_KEY_PASSWORD }}
+        run: |
+          if [[ -z "$FOCAL_RELEASE_KEYSTORE_BASE64" ||
+                -z "$FOCAL_RELEASE_KEY_ALIAS" ||
+                -z "$FOCAL_RELEASE_STORE_PASSWORD" ||
+                -z "$FOCAL_RELEASE_KEY_PASSWORD" ]]; then
+            echo "Release signing secrets are incomplete; refusing to build a release artifact." >&2
+            exit 1
+          fi
+          printf '%s' "$FOCAL_RELEASE_KEYSTORE_BASE64" |
+            base64 --decode > "$RUNNER_TEMP/focal-release.jks"
+          chmod 600 "$RUNNER_TEMP/focal-release.jks"
+
+      - name: Verify tag, test, lint, and build signed release
+        env:
+          FOCAL_RELEASE_KEYSTORE_PATH: ${{ runner.temp }}/focal-release.jks
+          FOCAL_RELEASE_KEY_ALIAS: ${{ secrets.FOCAL_RELEASE_KEY_ALIAS }}
+          FOCAL_RELEASE_STORE_PASSWORD: ${{ secrets.FOCAL_RELEASE_STORE_PASSWORD }}
+          FOCAL_RELEASE_KEY_PASSWORD: ${{ secrets.FOCAL_RELEASE_KEY_PASSWORD }}
+        run: >-
+          ./gradlew clean test lint :app:verifyReleaseTag assembleRelease
+          -Pfocal.releaseTag="$GITHUB_REF_NAME" --stacktrace --no-daemon
+
+      - name: Verify signature and prepare checksums
+        run: |
+          "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify \
+            --verbose --print-certs app/build/outputs/apk/release/app-release.apk
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p dist
+          cp app/build/outputs/apk/release/app-release.apk \
+            "dist/Focal-${version}-release.apk"
+          cp CHANGELOG.md dist/CHANGELOG.md
+          cd dist
+          sha256sum "Focal-${version}-release.apk" > \
+            "Focal-${version}-release.apk.sha256"
+
+      - name: Upload signed release candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: focal-${{ github.ref_name }}-signed-release
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
