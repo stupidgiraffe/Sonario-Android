@@ -18,6 +18,7 @@ class ModelCatalogTest {
             BUNDLED_MODELS.map(ModelInfo::sizeBytes),
         )
         assertEquals(3, BUNDLED_MODELS.map(ModelInfo::fileName).toSet().size)
+        assertTrue(BUNDLED_MODELS.all { it.sha256.matches(Regex("[0-9a-f]{64}")) })
         assertTrue(BUNDLED_MODELS.all { it.downloadUrl.startsWith("https://huggingface.co/") })
     }
 

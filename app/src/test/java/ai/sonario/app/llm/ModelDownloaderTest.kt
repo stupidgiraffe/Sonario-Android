@@ -2,6 +2,9 @@ package ai.sonario.app.llm
 
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
@@ -10,6 +13,7 @@ import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -46,7 +50,9 @@ class ModelDownloaderTest {
                 .setBody(okio.Buffer().write(expected, 4, 6))
         )
 
-        val states = downloader().download(model(expected.size.toLong())).toList()
+        val states = downloader().download(
+            model(expected.size.toLong(), expectedBytes = expected)
+        ).toList()
 
         assertTrue(states.last() is ModelDownloader.State.Done)
         assertArrayEquals(expected, java.io.File(modelsDir, "model.gguf").readBytes())
@@ -59,7 +65,9 @@ class ModelDownloaderTest {
         java.io.File(modelsDir, "model.gguf.part").writeText("0123")
         server.enqueue(MockResponse().setResponseCode(200).setBody(okio.Buffer().write(expected)))
 
-        val states = downloader().download(model(expected.size.toLong())).toList()
+        val states = downloader().download(
+            model(expected.size.toLong(), expectedBytes = expected)
+        ).toList()
 
         assertTrue(states.last() is ModelDownloader.State.Done)
         assertArrayEquals(expected, java.io.File(modelsDir, "model.gguf").readBytes())
@@ -126,6 +134,41 @@ class ModelDownloaderTest {
         assertEquals(0, server.requestCount)
     }
 
+    @Test
+    fun `removes a full length corrupted partial`() = runBlocking {
+        java.io.File(modelsDir, "model.gguf.part").writeText("corrupted!")
+
+        val states = downloader().download(model(10, expectedBytes = "0123456789".toByteArray()))
+            .toList()
+
+        assertTrue(states.last() is ModelDownloader.State.Failed)
+        assertFalse(java.io.File(modelsDir, "model.gguf.part").exists())
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test
+    fun `rejects duplicate concurrent download`() = runBlocking {
+        val expected = ByteArray(1024 * 1024) { (it % 251).toByte() }
+        server.enqueue(
+            MockResponse()
+                .setChunkedBody(okio.Buffer().write(expected), 64 * 1024)
+                .throttleBody(64 * 1024L, 50, java.util.concurrent.TimeUnit.MILLISECONDS)
+        )
+        val downloader = downloader()
+        val first = async(Dispatchers.IO) {
+            downloader.download(model(expected.size.toLong(), expectedBytes = expected)).toList()
+        }
+        assertNotNull(server.takeRequest(5, java.util.concurrent.TimeUnit.SECONDS))
+
+        val duplicate = downloader.download(
+            model(expected.size.toLong(), expectedBytes = expected)
+        ).toList()
+
+        assertTrue(duplicate.last() is ModelDownloader.State.Failed)
+        assertTrue((duplicate.last() as ModelDownloader.State.Failed).message.contains("already"))
+        first.cancelAndJoin()
+    }
+
     private fun downloader(usableBytes: Long = Long.MAX_VALUE) = ModelDownloader(
         modelsDir = modelsDir,
         http = OkHttpClient(),
@@ -133,10 +176,17 @@ class ModelDownloaderTest {
         storageHeadroomBytes = 0,
     )
 
-    private fun model(sizeBytes: Long, fileName: String = "model.gguf") = ModelInfo(
+    private fun model(
+        sizeBytes: Long,
+        fileName: String = "model.gguf",
+        expectedBytes: ByteArray = ByteArray(sizeBytes.toInt()) { (it % 251).toByte() },
+    ) = ModelInfo(
         label = "Test model",
         fileName = fileName,
         sizeBytes = sizeBytes,
+        sha256 = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(expectedBytes)
+            .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) },
         contextTokens = 4096,
         note = "test",
         downloadUrl = server.url("/model.gguf").toString(),

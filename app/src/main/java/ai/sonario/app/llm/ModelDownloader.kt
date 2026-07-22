@@ -13,6 +13,7 @@ import java.io.RandomAccessFile
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.coroutineContext
@@ -52,6 +53,10 @@ class ModelDownloader(
             emit(State.Failed("The model catalog does not contain a valid download size."))
             return@flow
         }
+        if (!SHA256.matches(model.sha256)) {
+            emit(State.Failed("The model catalog does not contain a valid checksum."))
+            return@flow
+        }
         if (!modelsDir.exists() && !modelsDir.mkdirs()) {
             emit(State.Failed("Focal could not create its private model directory."))
             return@flow
@@ -59,7 +64,9 @@ class ModelDownloader(
 
         val target = File(modelsDir, model.fileName)
         if (target.exists()) {
-            if (target.isFile && target.length() == model.sizeBytes) {
+            if (target.isFile && target.length() == model.sizeBytes &&
+                sha256(target) == model.sha256
+            ) {
                 emit(State.Done(target))
             } else {
                 emit(
@@ -82,6 +89,16 @@ class ModelDownloader(
             val part = File(modelsDir, model.fileName + PART_SUFFIX)
             var offset = part.takeIf { it.isFile }?.length() ?: 0L
             if (offset == model.sizeBytes) {
+                if (sha256(part) != model.sha256) {
+                    part.delete()
+                    emit(
+                        State.Failed(
+                            "The partial model failed its integrity check and was removed. " +
+                                "Tap Retry to download a fresh copy."
+                        )
+                    )
+                    return@flow
+                }
                 finalize(part, target)
                 emit(State.Progress(model.sizeBytes, model.sizeBytes))
                 emit(State.Done(target))
@@ -194,6 +211,17 @@ class ModelDownloader(
                     return@flow
                 }
 
+                if (sha256(part) != model.sha256) {
+                    part.delete()
+                    emit(
+                        State.Failed(
+                            "The downloaded model failed its integrity check and was removed. " +
+                                "Tap Retry to download it again."
+                        )
+                    )
+                    return@flow
+                }
+
                 finalize(part, target)
                 emit(State.Progress(target.length(), model.sizeBytes))
                 emit(State.Done(target))
@@ -225,6 +253,21 @@ class ModelDownloader(
         }
     }
 
+    private fun sha256(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().buffered(BUFFER_SIZE_BYTES).use { input ->
+            val buffer = ByteArray(BUFFER_SIZE_BYTES)
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                digest.update(buffer, 0, count)
+            }
+        }
+        return digest.digest().joinToString("") { byte ->
+            "%02x".format(byte.toInt() and 0xff)
+        }
+    }
+
     private data class ContentRange(val start: Long, val end: Long, val total: Long)
 
     private class DownloadValidationException(message: String) : Exception(message)
@@ -235,6 +278,7 @@ class ModelDownloader(
         private const val PROGRESS_STEP_BYTES = 512L * 1024L
         private const val BUFFER_SIZE_BYTES = 128 * 1024
         private val CONTENT_RANGE = Regex("bytes (\\d+)-(\\d+)/(\\d+)")
+        private val SHA256 = Regex("[0-9a-f]{64}")
         private val activeDownloads = ConcurrentHashMap.newKeySet<String>()
 
         private fun defaultHttpClient(): OkHttpClient = OkHttpClient.Builder()
