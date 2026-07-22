@@ -3,7 +3,6 @@ package ai.focal.app.llm
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
-import ai.focal.app.SensitiveDataRedactor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -17,7 +16,6 @@ import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
 import java.net.ConnectException
@@ -129,24 +127,7 @@ class CloudEngine(
         rateLimiter: RateLimiter?,
     ): ParsedCompletion {
         val endpoint = "${config.resolvedBaseUrl.trimEnd('/')}/chat/completions"
-        val messages = JSONArray()
-            .put(JSONObject().put("role", "system").put("content", system))
-            .put(JSONObject().put("role", "user").put("content", user))
-        val payload = JSONObject()
-            .put("model", config.model)
-            .put("messages", messages)
-            .put("temperature", config.temperature)
-            .put("max_tokens", maxTokens)
-            .put("stream", true)
-            .apply {
-                if (ProviderCapabilities.usesGroqQwenPolicy(config)) {
-                    put("top_p", 0.8)
-                    put("reasoning_effort", "none")
-                    put("reasoning_format", "hidden")
-                    put("stream_options", JSONObject().put("include_usage", true))
-                }
-            }
-            .toString()
+        val payload = CloudRequestPayloads.openAiCompatible(config, system, user, maxTokens)
         return performRequest(
             endpoint = endpoint,
             payload = payload,
@@ -169,16 +150,7 @@ class CloudEngine(
         rateLimiter: RateLimiter?,
     ): ParsedCompletion {
         val endpoint = "${config.resolvedBaseUrl.trimEnd('/')}/messages"
-        val messages = JSONArray()
-            .put(JSONObject().put("role", "user").put("content", user))
-        val payload = JSONObject()
-            .put("model", config.model)
-            .put("system", system)
-            .put("messages", messages)
-            .put("temperature", config.temperature)
-            .put("max_tokens", maxTokens.coerceIn(1, 8192))
-            .put("stream", true)
-            .toString()
+        val payload = CloudRequestPayloads.anthropic(config, system, user, maxTokens)
         return performRequest(
             endpoint = endpoint,
             payload = payload,
@@ -272,7 +244,7 @@ class CloudEngine(
             }
 
             if (code == 429) {
-                val providerMessage = apiMessage(body)
+                val providerMessage = CloudErrorMapper.apiMessage(body)
                 if (config.provider == LlmProvider.GROQ &&
                     GroqPolicy.isDailyLimit(providerMessage)
                 ) {
@@ -283,7 +255,9 @@ class CloudEngine(
                 }
                 rateAttempt++
                 if (rateAttempt > MAX_RATE_RETRIES) {
-                    throw RateLimitException(friendlyError(code, body, config.provider.displayName))
+                    throw RateLimitException(
+                        CloudErrorMapper.friendlyHttpError(code, body, config.provider.displayName)
+                    )
                 }
                 val waitMs = retryWaitMillis(retryAfterHeader, resetHeader, providerMessage)
                     .coerceIn(1_000L, MAX_RATE_WAIT_MS)
@@ -316,7 +290,8 @@ class CloudEngine(
             }
 
             if (code !in 200..299) {
-                val message = friendlyError(code, body, config.provider.displayName)
+                val message =
+                    CloudErrorMapper.friendlyHttpError(code, body, config.provider.displayName)
                 when (code) {
                     401, 403 -> throw AuthenticationException(message)
                     else -> throw RuntimeException(message)
@@ -354,7 +329,7 @@ class CloudEngine(
             val data = line.removePrefix("data:").trim()
             if (data.isBlank() || data == "[DONE]") return@forEach
             val obj = try { JSONObject(data) } catch (_: Exception) { return@forEach }
-            apiError(obj, providerName)?.let { throw RuntimeException(it) }
+            CloudErrorMapper.apiError(obj, providerName)?.let { throw RuntimeException(it) }
             val choice = obj.optJSONArray("choices")?.optJSONObject(0)
             val content = choice?.optJSONObject("delta")?.optString("content", "").orEmpty()
             if (content.isNotEmpty()) text.append(content)
@@ -367,7 +342,7 @@ class CloudEngine(
                 "Returned an unreadable response instead of JSON. Please try again."
             )
         }
-        apiError(obj, providerName)?.let { throw RuntimeException(it) }
+        CloudErrorMapper.apiError(obj, providerName)?.let { throw RuntimeException(it) }
         val choice = obj.optJSONArray("choices")?.optJSONObject(0)
         val content = choice?.optJSONObject("message")?.optString("content", "")
             ?.ifBlank { choice?.optJSONObject("delta")?.optString("content", "").orEmpty() }
@@ -400,7 +375,7 @@ class CloudEngine(
             val data = line.removePrefix("data:").trim()
             if (data.isBlank()) return@forEach
             val obj = try { JSONObject(data) } catch (_: Exception) { return@forEach }
-            apiError(obj, providerName)?.let { throw RuntimeException(it) }
+            CloudErrorMapper.apiError(obj, providerName)?.let { throw RuntimeException(it) }
             val type = obj.optString("type", "")
             if (type == "content_block_delta") {
                 val delta = obj.optJSONObject("delta")
@@ -435,29 +410,6 @@ class CloudEngine(
     }
 
     // ── shared helpers ─────────────────────────────────────────────────────────
-
-    private fun apiError(obj: JSONObject, providerName: String): String? {
-        val error = obj.optJSONObject("error") ?: return null
-        val message = safeProviderMessage(error.optString("message"))
-        val type = safeProviderMessage(error.optString("type"))
-        return if (message.isBlank() && type.isBlank()) {
-            "$providerName returned an API error."
-        } else if (message.isNotBlank()) {
-            "$providerName: $message"
-        } else {
-            "$providerName: $type"
-        }
-    }
-
-    private fun apiMessage(body: String): String? = try {
-        JSONObject(body).optJSONObject("error")?.optString("message")
-            ?.let(::safeProviderMessage)
-    } catch (_: Exception) {
-        null
-    }
-
-    private fun safeProviderMessage(message: String): String =
-        SensitiveDataRedactor.redact(message.trim(), MAX_PROVIDER_ERROR_CHARS)
 
     private fun retryWaitMillis(retryAfter: String?, reset: String?, message: String?): Long =
         RetryDelayParser.retryAfterMillis(retryAfter)
@@ -530,27 +482,6 @@ class CloudEngine(
                 (error.message ?: error.javaClass.simpleName)
     }
 
-    private fun friendlyError(code: Int, body: String, provider: String): String {
-        val message = try {
-            val obj = JSONObject(body)
-            obj.optJSONObject("error")?.optString("message")?.trim()
-                ?: obj.optJSONObject("error")?.optString("type")?.trim()
-        } catch (_: Exception) { null }?.let(::safeProviderMessage)
-        return when (code) {
-            400 -> "$provider rejected this request" +
-                (if (!message.isNullOrBlank()) ": $message" else ".")
-            401 -> "$provider rejected the API key. Check it in Settings → Providers."
-            403 -> "$provider denied this request. Check the API key and model access."
-            404 -> "The selected model was not found. Choose a current model in Settings."
-            413 -> "This source is too large for one request. Try a shorter source."
-            429 -> "$provider's rate limit is still active after repeated waits. Try again later." +
-                (if (!message.isNullOrBlank()) ": $message" else ".")
-            in 500..599 -> "$provider had a server error after automatic retries. Try again shortly."
-            else -> "$provider request failed ($code)" +
-                (if (!message.isNullOrBlank()) ": $message" else ".")
-        }
-    }
-
     private data class ParsedCompletion(
         val text: String,
         val usageTokens: Long? = null,
@@ -561,7 +492,6 @@ class CloudEngine(
         private const val NETWORK_POLL_MS = 2_000L
         private const val MAX_RATE_RETRIES = 8
         private const val MAX_RATE_WAIT_MS = 10L * 60L * 1_000L
-        private const val MAX_PROVIDER_ERROR_CHARS = 500
         private const val ANTHROPIC_VERSION = "2023-06-01"
     }
 }
