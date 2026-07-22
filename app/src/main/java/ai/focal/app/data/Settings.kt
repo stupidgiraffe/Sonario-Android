@@ -25,6 +25,11 @@ class Settings(context: Context) {
     var migrationIssue: String? = null
         private set
 
+    var providerSelectionIssue: String? = prefs.getString(KEY_CLOUD_PROVIDER, null)
+        ?.takeIf { LlmProvider.fromIdOrNull(it) == null }
+        ?.let { "Saved cloud provider '$it' is not supported by this version of Focal." }
+        private set
+
     init { migrateLegacySettings(appContext) }
 
     var engine: EngineChoice
@@ -39,8 +44,13 @@ class Settings(context: Context) {
 
     /** Currently selected cloud provider. */
     var cloudProvider: LlmProvider
-        get() = LlmProvider.fromId(prefs.getString(KEY_CLOUD_PROVIDER, LlmProvider.GROQ.id))
-        set(v) = prefs.edit().putString(KEY_CLOUD_PROVIDER, v.id).apply()
+        get() = LlmProvider.fromIdOrNull(
+            prefs.getString(KEY_CLOUD_PROVIDER, LlmProvider.GROQ.id),
+        ) ?: LlmProvider.GROQ
+        set(v) {
+            prefs.edit().putString(KEY_CLOUD_PROVIDER, v.id).apply()
+            providerSelectionIssue = null
+        }
 
     /** Selected model per provider: key = provider id, value = model string. */
     fun modelFor(provider: LlmProvider): String {
@@ -99,6 +109,11 @@ class Settings(context: Context) {
     /** Stores (or clears) the API key for [provider]. */
     fun setKeyFor(provider: LlmProvider, key: String?) {
         SecureStorage.storeKey(appContext, provider.id, key)
+        if (provider == LlmProvider.GROQ) {
+            // A successful explicit write supersedes any legacy plaintext value.
+            prefs.edit().remove(KEY_LEGACY_GROQ_KEY).apply()
+            migrationIssue = null
+        }
     }
 
     /** Builds a [ProviderConfig] for [provider] from the saved settings. */

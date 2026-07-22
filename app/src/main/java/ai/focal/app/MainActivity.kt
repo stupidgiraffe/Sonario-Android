@@ -98,7 +98,7 @@ class MainActivity : ComponentActivity() {
                 // navigation (Models/Settings) always wins over this.
                 val needsSetup = !uiState.hasAnyModel &&
                     uiState.engineChoice == EngineChoice.ON_DEVICE &&
-                    !uiState.groqKeySet
+                    !uiState.cloudConfigured
 
                 when {
                     screen == Screen.MODELS ->

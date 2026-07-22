@@ -19,6 +19,7 @@ import ai.focal.app.llm.ModelDownloader
 import ai.focal.app.llm.ModelInfo
 import ai.focal.app.llm.RateLimiter
 import ai.focal.app.llm.ProviderRateLimiters
+import ai.focal.app.llm.SecureStorage
 import ai.focal.app.source.FileTextExtractor
 import ai.focal.app.source.SourceFetcher
 import ai.focal.app.summarize.SummarizeEngine
@@ -71,14 +72,20 @@ data class UiState(
     val download: DownloadState = DownloadState(),
     // engine + cloud settings
     val engineChoice: EngineChoice = EngineChoice.ON_DEVICE,
-    val groqKeySet: Boolean = false,
-    val groqModel: String = RateLimiter.GROQ_QWEN_MODEL,
+    val cloudProvider: LlmProvider = LlmProvider.GROQ,
+    val providerKeySet: Boolean = false,
+    val providerModel: String = RateLimiter.GROQ_QWEN_MODEL,
+    val customBaseUrl: String = "",
+    val providerIssue: String? = null,
     // Durable local sessions.
     val activeSessionId: String? = null,
     val recentSessions: List<SessionPreview> = emptyList(),
     val resumeAvailable: Boolean = false,
     val sessionNotice: String = "",
-)
+) {
+    val cloudConfigured: Boolean
+        get() = providerIssue == null && (!cloudProvider.needsKey || providerKeySet)
+}
 
 class SummaryViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -338,6 +345,8 @@ class SummaryViewModel(app: Application) : AndroidViewModel(app) {
         return u.used to u.limit
     }
 
+    fun hasTrackedDailyBudget(): Boolean = activeRateLimiter() != null
+
     /** Manually clear the app's daily token tally (e.g. if it drifts). */
     fun resetDailyBudget() {
         activeRateLimiter()?.resetDaily()
@@ -421,11 +430,17 @@ class SummaryViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun applySession(session: SummarySession, restoredAtLaunch: Boolean = false) {
-        val sessionProvider = LlmProvider.fromId(session.cloudProviderId)
+        val sessionProvider = LlmProvider.fromIdOrNull(session.cloudProviderId)
+        val restoreIssue = session.migrationIssue ?: if (
+            session.engineChoice == EngineChoice.CLOUD && sessionProvider == null
+        ) {
+            "Saved session uses unsupported cloud provider '${session.cloudProviderId}'."
+        } else null
         val models = llm.availableModels()
         val chosenModel = llm.modelForFileName(session.modelFileName)
             ?: _ui.value.model
-        val canResume = session.sourceText.isNotBlank() && session.result == null
+        val canResume = session.sourceText.isNotBlank() && session.result == null &&
+            restoreIssue == null
         val interrupted = session.status == SessionStatus.RUNNING && processSummaryJob?.isActive != true
         val notice = when {
             session.result != null && restoredAtLaunch ->
@@ -439,17 +454,21 @@ class SummaryViewModel(app: Application) : AndroidViewModel(app) {
             else -> ""
         }
 
-        settings.engine = session.engineChoice
-        if (session.engineChoice == EngineChoice.CLOUD) {
+        if (restoreIssue == null) settings.engine = session.engineChoice
+        if (session.engineChoice == EngineChoice.CLOUD && sessionProvider != null && restoreIssue == null) {
             settings.cloudProvider = sessionProvider
             if (session.cloudModel.isNotBlank()) {
                 settings.setModelFor(sessionProvider, session.cloudModel)
             }
         }
         lastSourceText = session.sourceText
-        lastSummarizer = if (session.sourceText.isNotBlank()) {
+        lastSummarizer = if (session.sourceText.isNotBlank() && restoreIssue == null) {
             makeSummarizer(session.engineChoice)
         } else null
+
+        val activeProvider = sessionProvider ?: settings.cloudProvider
+        val credential = settings.credentialStateFor(activeProvider)
+        val activeConfig = settings.configFor(activeProvider)
 
         _ui.value = _ui.value.copy(
             input = session.input,
@@ -467,6 +486,7 @@ class SummaryViewModel(app: Application) : AndroidViewModel(app) {
             result = session.result,
             view = SummaryView.NORMAL,
             error = when {
+                restoreIssue != null -> restoreIssue
                 session.result != null -> null
                 interrupted -> null
                 session.status == SessionStatus.FAILED -> session.error
@@ -476,7 +496,11 @@ class SummaryViewModel(app: Application) : AndroidViewModel(app) {
             models = models,
             hasAnyModel = models.any { it.present },
             engineChoice = session.engineChoice,
-            groqModel = session.cloudModel.ifBlank { settings.modelFor(sessionProvider) },
+            cloudProvider = activeProvider,
+            providerKeySet = credential.isSet,
+            providerModel = session.cloudModel.ifBlank { activeConfig.model },
+            customBaseUrl = activeConfig.customBaseUrl,
+            providerIssue = restoreIssue ?: credential.error ?: activeConfig.validationError(),
             activeSessionId = session.id,
             resumeAvailable = canResume && processSummaryJob?.isActive != true,
             sessionNotice = notice,
@@ -552,11 +576,21 @@ class SummaryViewModel(app: Application) : AndroidViewModel(app) {
                     error = "This session stopped before the source was saved, so it cannot be resumed.")
                 return@launch
             }
-            val sessionProvider = LlmProvider.fromId(loaded.cloudProviderId)
+            if (loaded.migrationIssue != null) {
+                _ui.value = _ui.value.copy(error = loaded.migrationIssue)
+                return@launch
+            }
+            val sessionProvider = LlmProvider.fromIdOrNull(loaded.cloudProviderId)
+            if (loaded.engineChoice == EngineChoice.CLOUD && sessionProvider == null) {
+                _ui.value = _ui.value.copy(
+                    error = "Saved session uses unsupported cloud provider '${loaded.cloudProviderId}'.")
+                return@launch
+            }
             if (loaded.engineChoice == EngineChoice.CLOUD) {
-                settings.cloudProvider = sessionProvider
+                val provider = sessionProvider ?: return@launch
+                settings.cloudProvider = provider
                 if (loaded.cloudModel.isNotBlank()) {
-                    settings.setModelFor(sessionProvider, loaded.cloudModel)
+                    settings.setModelFor(provider, loaded.cloudModel)
                 }
             }
             if (!validateEngine(loaded.engineChoice, modelFor(loaded))) return@launch
@@ -595,10 +629,25 @@ class SummaryViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun validateEngine(choice: EngineChoice, model: ModelInfo): Boolean {
         val provider = settings.cloudProvider
-        if (choice == EngineChoice.CLOUD && provider.needsKey && !settings.hasKeyFor(provider)) {
-            _ui.value = _ui.value.copy(
-                error = "This session uses ${provider.displayName}, but no API key is currently set.")
-            return false
+        if (choice == EngineChoice.CLOUD) {
+            settings.providerSelectionIssue?.let { issue ->
+                _ui.value = _ui.value.copy(error = issue, providerIssue = issue)
+                return false
+            }
+            settings.configFor(provider).validationError()?.let { issue ->
+                _ui.value = _ui.value.copy(error = issue, providerIssue = issue)
+                return false
+            }
+            val credential = settings.credentialStateFor(provider)
+            if (credential.error != null) {
+                _ui.value = _ui.value.copy(error = credential.error, providerIssue = credential.error)
+                return false
+            }
+            if (provider.needsKey && !credential.isSet) {
+                _ui.value = _ui.value.copy(
+                    error = "This session uses ${provider.displayName}, but no API key is currently set.")
+                return false
+            }
         }
         if (choice == EngineChoice.ON_DEVICE && !llm.isModelPresent(model)) {
             _ui.value = _ui.value.copy(
@@ -624,6 +673,9 @@ class SummaryViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun prepareUiForSession(session: SummarySession, notice: String = "") {
+        val provider = settings.cloudProvider
+        val credential = settings.credentialStateFor(provider)
+        val config = settings.configFor(provider)
         _ui.value = _ui.value.copy(
             input = session.input,
             busy = true,
@@ -637,7 +689,11 @@ class SummaryViewModel(app: Application) : AndroidViewModel(app) {
             askError = null,
             qaHistory = session.qaHistory.map { QaPair(it.question, it.answer) },
             engineChoice = session.engineChoice,
-            groqModel = session.cloudModel.ifBlank { settings.modelFor(settings.cloudProvider) },
+            cloudProvider = provider,
+            providerKeySet = credential.isSet,
+            providerModel = session.cloudModel.ifBlank { config.model },
+            customBaseUrl = config.customBaseUrl,
+            providerIssue = credential.error ?: config.validationError(),
             activeSessionId = session.id,
             resumeAvailable = false,
             sessionNotice = notice,
@@ -788,13 +844,20 @@ class SummaryViewModel(app: Application) : AndroidViewModel(app) {
     private fun initialState(): UiState {
         val models = llm.availableModels()
         val present = models.firstOrNull { it.present }
+        val provider = settings.cloudProvider
+        val credential = settings.credentialStateFor(provider)
+        val config = settings.configFor(provider)
         return UiState(
             models = models,
             hasAnyModel = present != null,
             model = present ?: models.first(),
             engineChoice = settings.engine,
-            groqKeySet = settings.hasKeyFor(settings.cloudProvider),
-            groqModel = settings.modelFor(settings.cloudProvider),
+            cloudProvider = provider,
+            providerKeySet = credential.isSet,
+            providerModel = config.model,
+            customBaseUrl = config.customBaseUrl,
+            providerIssue = settings.migrationIssue ?: settings.providerSelectionIssue
+                ?: credential.error ?: config.validationError(),
         )
     }
 
@@ -826,22 +889,67 @@ class SummaryViewModel(app: Application) : AndroidViewModel(app) {
         _ui.value = _ui.value.copy(engineChoice = choice, error = null)
     }
 
-    fun setGroqKey(key: String) {
-        val changed = key.trim() != (settings.keyFor(settings.cloudProvider) ?: "")
-        settings.setKeyFor(settings.cloudProvider, key)
-        // A new key has its own fresh daily budget on Groq's side.
-        if (changed) activeRateLimiter()?.resetDaily()
-        _ui.value = _ui.value.copy(groqKeySet = settings.hasKeyFor(settings.cloudProvider))
+    fun setCloudProvider(provider: LlmProvider) {
+        if (_ui.value.busy || _ui.value.asking) return
+        settings.cloudProvider = provider
+        refreshProviderState(provider)
     }
 
-    fun setGroqModel(model: String) {
-        settings.setModelFor(settings.cloudProvider, model)
-        _ui.value = _ui.value.copy(groqModel = settings.modelFor(settings.cloudProvider))
+    fun setProviderKey(key: String) {
+        if (_ui.value.busy || _ui.value.asking) return
+        val provider = settings.cloudProvider
+        try {
+            val changed = key.trim() != (settings.keyFor(provider) ?: "")
+            settings.setKeyFor(provider, key)
+            if (changed) activeRateLimiter()?.resetDaily()
+            refreshProviderState(provider)
+        } catch (error: Exception) {
+            _ui.value = _ui.value.copy(
+                providerIssue = error.message ?: "The credential could not be saved.")
+        }
     }
 
-    fun currentGroqKeyMasked(): String {
-        val k = settings.keyFor(settings.cloudProvider) ?: return ""
-        return if (k.length <= 8) "••••" else k.take(4) + "…" + k.takeLast(4)
+    fun clearProviderKey() {
+        if (_ui.value.busy || _ui.value.asking) return
+        val provider = settings.cloudProvider
+        try {
+            settings.setKeyFor(provider, null)
+            refreshProviderState(provider)
+        } catch (error: Exception) {
+            _ui.value = _ui.value.copy(
+                providerIssue = error.message ?: "The credential could not be removed.")
+        }
+    }
+
+    fun setProviderModel(model: String) {
+        if (_ui.value.busy || _ui.value.asking) return
+        val provider = settings.cloudProvider
+        settings.setModelFor(provider, model)
+        refreshProviderState(provider)
+    }
+
+    fun setCustomBaseUrl(url: String) {
+        if (_ui.value.busy || _ui.value.asking) return
+        val provider = settings.cloudProvider
+        settings.setCustomBaseUrlFor(provider, url)
+        refreshProviderState(provider)
+    }
+
+    fun maskedProviderKey(): String = runCatching {
+        SecureStorage.masked(settings.keyFor(settings.cloudProvider))
+    }.getOrDefault("Unavailable")
+
+    private fun refreshProviderState(provider: LlmProvider) {
+        val credential = settings.credentialStateFor(provider)
+        val config = settings.configFor(provider)
+        _ui.value = _ui.value.copy(
+            cloudProvider = provider,
+            providerKeySet = credential.isSet,
+            providerModel = config.model,
+            customBaseUrl = config.customBaseUrl,
+            providerIssue = credential.error ?: config.validationError(),
+            error = null,
+        )
     }
 
     // ── model download (first-run picker + Models screen) ──────────────────────

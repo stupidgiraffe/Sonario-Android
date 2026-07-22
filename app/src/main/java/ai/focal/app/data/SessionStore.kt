@@ -36,6 +36,8 @@ data class SummarySession(
     val result: SummarizeEngine.Result? = null,
     val qaHistory: List<StoredQa> = emptyList(),
     val error: String? = null,
+    /** Runtime-only explanation when saved execution settings cannot be restored safely. */
+    val migrationIssue: String? = null,
 )
 
 data class SessionPreview(
@@ -196,6 +198,13 @@ class SessionStore(context: Context) {
         sourceText: String,
         chapters: List<FileTextExtractor.Chapter>,
     ): SummarySession {
+        val migrated = SessionMigration.migrate(
+            schema = o.optInt("schema", 1),
+            engineChoice = o.stringOrNull("engineChoice"),
+            cloudProviderId = o.stringOrNull("cloudProviderId"),
+            cloudModel = o.stringOrNull("cloudModel"),
+            legacyGroqModel = o.stringOrNull("groqModel"),
+        )
         val qa = o.optJSONArray("qaHistory")?.let { array ->
             buildList {
                 for (i in 0 until array.length()) {
@@ -216,11 +225,10 @@ class SessionStore(context: Context) {
             approxMinutes = if (o.isNull("approxMinutes")) null else o.optInt("approxMinutes"),
             sourceText = sourceText,
             chapters = chapters,
-            engineChoice = runCatching { EngineChoice.valueOf(o.optString("engineChoice")) }
-                .getOrDefault(EngineChoice.CLOUD),
+            engineChoice = migrated.engineChoice,
             modelFileName = o.optString("modelFileName", ""),
-            cloudProviderId = o.optString("cloudProviderId", LlmProvider.GROQ.id),
-            cloudModel = o.optString("cloudModel", ""),
+            cloudProviderId = migrated.cloudProviderId,
+            cloudModel = migrated.cloudModel,
             phase = o.optString("phase", ""),
             progressCurrent = o.optInt("progressCurrent"),
             progressTotal = o.optInt("progressTotal"),
@@ -229,6 +237,7 @@ class SessionStore(context: Context) {
             result = if (o.isNull("result")) null else o.optJSONObject("result")?.let(::resultFromJson),
             qaHistory = qa,
             error = if (o.isNull("error")) null else o.optString("error"),
+            migrationIssue = migrated.issue,
         )
     }
 
@@ -275,6 +284,9 @@ class SessionStore(context: Context) {
         }
     }
 
+    private fun JSONObject.stringOrNull(key: String): String? =
+        if (has(key) && !isNull(key)) optString(key) else null
+
     private fun atomicWrite(target: File, text: String) {
         target.parentFile?.mkdirs()
         val temp = File(target.parentFile, "${target.name}.tmp")
@@ -294,7 +306,7 @@ class SessionStore(context: Context) {
     private fun sessionDir(id: String) = File(root, id)
 
     companion object {
-        private const val SCHEMA = 2
+        private const val SCHEMA = 3
         private const val MAX_SESSIONS = 12
         private const val META_FILE = "session.json"
         private const val SOURCE_FILE = "source.txt"
