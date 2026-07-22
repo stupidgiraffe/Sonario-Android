@@ -22,9 +22,10 @@ class Settings(context: Context) {
     private val prefs = appContext
         .getSharedPreferences("sonario_settings", Context.MODE_PRIVATE)
 
-    init {
-        migrateLegacyKey(appContext)
-    }
+    var migrationIssue: String? = null
+        private set
+
+    init { migrateLegacySettings(appContext) }
 
     var engine: EngineChoice
         get() = if (prefs.getString(KEY_ENGINE, "on_device") == "cloud") {
@@ -80,6 +81,17 @@ class Settings(context: Context) {
     fun hasKeyFor(provider: LlmProvider): Boolean =
         SecureStorage.hasKey(appContext, provider.id)
 
+    data class CredentialState(val isSet: Boolean, val error: String? = null)
+
+    fun credentialStateFor(provider: LlmProvider): CredentialState = try {
+        CredentialState(isSet = SecureStorage.hasKey(appContext, provider.id))
+    } catch (error: Exception) {
+        CredentialState(
+            isSet = false,
+            error = error.message ?: "The saved credential is unavailable.",
+        )
+    }
+
     /** Returns the stored API key for [provider], or null if not set. */
     fun keyFor(provider: LlmProvider): String? =
         SecureStorage.getKey(appContext, provider.id)
@@ -100,22 +112,30 @@ class Settings(context: Context) {
 
     // ── legacy migration ─────────────────────────────────────────────────────
 
-    private fun migrateLegacyKey(context: Context) {
-        if (!prefs.contains(KEY_LEGACY_GROQ_KEY)) return
-        val legacy = prefs.getString(KEY_LEGACY_GROQ_KEY, null)
-        if (!legacy.isNullOrBlank()) {
-            SecureStorage.storeKey(context, LlmProvider.GROQ.id, legacy)
-        }
-        // Also bring over the legacy model string if present
+    private fun migrateLegacySettings(context: Context) {
+        // Model migration is independent of credential migration so a user who
+        // never stored a key still retains their model selection.
         prefs.getString(KEY_LEGACY_GROQ_MODEL, null)?.let { oldModel ->
             if (oldModel.isNotBlank() && !prefs.contains("$KEY_MODEL_PREFIX${LlmProvider.GROQ.id}")) {
                 setModelFor(LlmProvider.GROQ, oldModel)
             }
+            prefs.edit().remove(KEY_LEGACY_GROQ_MODEL).apply()
         }
-        prefs.edit()
-            .remove(KEY_LEGACY_GROQ_KEY)
-            .remove(KEY_LEGACY_GROQ_MODEL)
-            .apply()
+
+        if (!prefs.contains(KEY_LEGACY_GROQ_KEY)) return
+        val legacy = prefs.getString(KEY_LEGACY_GROQ_KEY, null)
+        if (legacy.isNullOrBlank()) {
+            prefs.edit().remove(KEY_LEGACY_GROQ_KEY).apply()
+            return
+        }
+        try {
+            SecureStorage.storeKey(context, LlmProvider.GROQ.id, legacy)
+            prefs.edit().remove(KEY_LEGACY_GROQ_KEY).apply()
+        } catch (error: Exception) {
+            // Keep the legacy value for retry and surface the failure. Deleting
+            // it here would silently lose the user's credential.
+            migrationIssue = error.message ?: "The legacy Groq key could not be encrypted."
+        }
     }
 
     companion object {

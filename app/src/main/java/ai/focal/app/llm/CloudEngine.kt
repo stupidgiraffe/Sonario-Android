@@ -64,6 +64,7 @@ class CloudEngine(
 
     override suspend fun ensureReady(model: ModelInfo) {
         val config = configProvider()
+        config.validationError()?.let { throw IllegalStateException(it) }
         if (config.provider.needsKey) {
             val key = apiKeyProvider()
             require(!key.isNullOrBlank()) {
@@ -75,17 +76,13 @@ class CloudEngine(
     override fun stream(system: String, user: String, maxTokens: Int): Flow<String> =
         flow {
             val config = configProvider()
+            config.validationError()?.let { throw IllegalStateException(it) }
             val key = apiKeyProvider()?.trim()?.takeIf { it.isNotEmpty() }
             if (config.provider.needsKey && key.isNullOrBlank()) {
                 throw IllegalStateException(
                     "No ${config.provider.displayName} API key is set."
                 )
             }
-            val model = config.model.trim()
-            if (model.isEmpty()) throw IllegalStateException(
-                "No ${config.provider.displayName} model is selected."
-            )
-
             val estimatedInput = RateLimiter.estimateTokens(system) +
                 RateLimiter.estimateTokens(user)
             val estimatedTotal = estimatedInput + maxTokens

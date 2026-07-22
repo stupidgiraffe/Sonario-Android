@@ -1,5 +1,7 @@
 package ai.focal.app.llm
 
+import java.net.URI
+
 /**
  * A selectable cloud LLM provider. Each has a stable [id] used as the
  * SharedPreferences key, a human [displayName], a default API [baseUrl],
@@ -73,8 +75,11 @@ enum class LlmProvider(
     ;
 
     companion object {
+        fun fromIdOrNull(id: String?): LlmProvider? =
+            entries.firstOrNull { it.id == id }
+
         fun fromId(id: String?): LlmProvider =
-            entries.firstOrNull { it.id == id } ?: GROQ
+            fromIdOrNull(id) ?: GROQ
     }
 }
 
@@ -93,4 +98,24 @@ data class ProviderConfig(
     /** Effective base URL: user override if set, otherwise provider default. */
     val resolvedBaseUrl: String
         get() = customBaseUrl.trim().ifBlank { provider.baseUrl }
+
+    /** Returns an actionable validation message, or null when requests are safe to build. */
+    fun validationError(): String? {
+        if (model.isBlank()) return "Select a model for ${provider.displayName}."
+
+        val endpoint = resolvedBaseUrl
+        if (endpoint.isBlank()) return "Enter a base URL for ${provider.displayName}."
+        val uri = runCatching { URI(endpoint) }.getOrNull()
+            ?: return "Enter a valid ${provider.displayName} base URL."
+        if (uri.scheme !in setOf("http", "https") || uri.host.isNullOrBlank()) {
+            return "The ${provider.displayName} base URL must use http or https and include a host."
+        }
+        if (uri.userInfo != null) {
+            return "Remove embedded credentials from the ${provider.displayName} base URL."
+        }
+        if (uri.query != null || uri.fragment != null) {
+            return "Remove query parameters and fragments from the ${provider.displayName} base URL."
+        }
+        return null
+    }
 }
