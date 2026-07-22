@@ -77,13 +77,14 @@ dependencies {
 
     // On-device LLM via llama.cpp, through the Llamatik Maven library.
     // No NDK, no native build: it ships prebuilt arm64 binaries.
-    implementation("com.llamatik:library-android:1.7.0")
+    implementation("com.llamatik:library-android:1.8.1")
 
     // Secure API key storage (hardware-backed encryption for BYOK credentials).
     implementation("androidx.security:security-crypto:1.0.0")
 
     // Testing
     testImplementation("junit:junit:4.13.2")
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     debugImplementation("androidx.compose.ui:ui-test-manifest")

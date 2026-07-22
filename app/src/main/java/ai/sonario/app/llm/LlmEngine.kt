@@ -39,6 +39,10 @@ class LlmEngine private constructor(private val appContext: Context) : Inference
         m.copy(present = File(modelsDir(), m.fileName).exists())
     }
 
+    fun modelForFileName(fileName: String): ModelInfo? =
+        ALL_LOCAL_MODELS.firstOrNull { it.fileName == fileName }
+            ?.let { it.copy(present = File(modelsDir(), it.fileName).isFile) }
+
     fun isModelPresent(model: ModelInfo): Boolean =
         File(modelsDir(), model.fileName).exists()
 
@@ -59,15 +63,15 @@ class LlmEngine private constructor(private val appContext: Context) : Inference
 
         // Load-time params must be set before initGenerateModel.
         LlamaBridge.updateGenerateParams(
-            temperature = 0.5f,        // summaries want low randomness
+            temperature = 0.35f,       // summaries want low randomness
             maxTokens = 1024,
-            topP = 0.95f,
+            topP = 0.9f,
             topK = 40,
             repeatPenalty = 1.1f,
             contextLength = model.contextTokens,
             numThreads = pickThreads(),
             useMmap = true,            // memory-map weights; lighter on RAM
-            flashAttention = false,
+            flashAttention = true,
             batchSize = 256,
             gpuLayers = -1,            // best-effort GPU offload; falls back to CPU if unsupported
         )
@@ -95,10 +99,10 @@ class LlmEngine private constructor(private val appContext: Context) : Inference
             // maxTokens can change per call without a reload.
             runCatching {
                 LlamaBridge.updateGenerateParams(
-                    temperature = 0.5f, maxTokens = maxTokens, topP = 0.95f,
+                    temperature = 0.35f, maxTokens = maxTokens, topP = 0.9f,
                     topK = 40, repeatPenalty = 1.1f,
                     contextLength = currentContext(), numThreads = pickThreads(),
-                    useMmap = true, flashAttention = false, batchSize = 256,
+                    useMmap = true, flashAttention = true, batchSize = 256,
                     gpuLayers = -1,
                 )
             }
@@ -127,7 +131,7 @@ class LlmEngine private constructor(private val appContext: Context) : Inference
         }.flowOn(Dispatchers.Default)
 
     private fun currentContext(): Int =
-        BUNDLED_MODELS.firstOrNull { it.fileName == loadedModel }?.contextTokens ?: 4096
+        ALL_LOCAL_MODELS.firstOrNull { it.fileName == loadedModel }?.contextTokens ?: 4096
 
     private fun pickThreads(): Int {
         val cores = Runtime.getRuntime().availableProcessors()
@@ -144,49 +148,3 @@ class LlmEngine private constructor(private val appContext: Context) : Inference
             }
     }
 }
-
-data class ModelInfo(
-    val label: String,
-    val fileName: String,
-    val sizeMb: Int,
-    val contextTokens: Int,
-    val note: String,
-    val downloadUrl: String,
-    val present: Boolean = false,
-)
-
-/**
- * Models that suit an 8GB-class phone (Snapdragon 8 Elite, ~12-16GB RAM). All
- * are small enough to load fully into RAM and run at usable speed via llama.cpp
- * with Q4_K_M quantization. The download URLs point at public GGUF repos on
- * Hugging Face. The first-run picker downloads exactly one.
- */
-val BUNDLED_MODELS = listOf(
-    ModelInfo(
-        label = "Qwen2.5 1.5B Instruct",
-        fileName = "qwen2.5-1.5b-instruct-q4_k_m.gguf",
-        sizeMb = 1100,
-        contextTokens = 4096,
-        note = "Fast, good summaries. The safe default for any 8GB+ phone.",
-        downloadUrl = "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/" +
-            "resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf?download=true",
-    ),
-    ModelInfo(
-        label = "Llama 3.2 3B Instruct",
-        fileName = "llama-3.2-3b-instruct-q4_k_m.gguf",
-        sizeMb = 2000,
-        contextTokens = 4096,
-        note = "Stronger synthesis, comfortable on the S26 Ultra. Slower.",
-        downloadUrl = "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/" +
-            "resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf?download=true",
-    ),
-    ModelInfo(
-        label = "Phi-3.5 Mini Instruct",
-        fileName = "phi-3.5-mini-instruct-q4_k_m.gguf",
-        sizeMb = 2300,
-        contextTokens = 4096,
-        note = "Roomy context comfort for long transcripts.",
-        downloadUrl = "https://huggingface.co/bartowski/Phi-3.5-mini-instruct-GGUF/" +
-            "resolve/main/Phi-3.5-mini-instruct-Q4_K_M.gguf?download=true",
-    ),
-)

@@ -412,7 +412,7 @@ class SummaryViewModel(app: Application) : AndroidViewModel(app) {
     private fun applySession(session: SummarySession, restoredAtLaunch: Boolean = false) {
         val sessionProvider = LlmProvider.fromId(session.cloudProviderId)
         val models = llm.availableModels()
-        val chosenModel = models.firstOrNull { it.fileName == session.modelFileName }
+        val chosenModel = llm.modelForFileName(session.modelFileName)
             ?: _ui.value.model
         val canResume = session.sourceText.isNotBlank() && session.result == null
         val interrupted = session.status == SessionStatus.RUNNING && processSummaryJob?.isActive != true
@@ -570,8 +570,7 @@ class SummaryViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun modelFor(session: SummarySession): ModelInfo {
-        val models = llm.availableModels()
-        return models.firstOrNull { it.fileName == session.modelFileName }
+        return llm.modelForFileName(session.modelFileName)
             ?: _ui.value.model
     }
 
