@@ -5,15 +5,15 @@ plugins {
 }
 
 android {
-    namespace = "ai.sonario.app"
+    namespace = "ai.focal.app"
     compileSdk = 36
 
     defaultConfig {
         applicationId = "ai.focal.app"
         minSdk = 28          // Android 9. 8 Elite phones are far above this.
         targetSdk = 36
-        versionCode = 10
-        versionName = "1.4.0"
+        versionCode = 11
+        versionName = "1.0.0"
         ndk { abiFilters += "arm64-v8a" }  // modern phones; keeps APK lean
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

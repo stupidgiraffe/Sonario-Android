@@ -13,7 +13,7 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Sonario"
+rootProject.name = "Focal"
 include(":app")
 // The llama.cpp Android binding is added as a local module. See README:
 // clone llama.cpp and point this at examples/llama.android/llama
