@@ -3,6 +3,7 @@ package ai.focal.app.llm
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import ai.focal.app.SensitiveDataRedactor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -234,7 +235,7 @@ class CloudEngine(
                     throw RuntimeException(friendlyNetworkError(error), error)
                 }
                 networkAttempt++
-                waitForConnection(networkAttempt, deadline, error)
+                waitForConnection(networkAttempt, deadline, error, config.provider.displayName)
                 rateLimiter?.awaitRetry(onRateWait)
                 continue@requestLoop
             }
@@ -262,7 +263,7 @@ class CloudEngine(
                     throw RuntimeException(friendlyNetworkError(error), error)
                 }
                 networkAttempt++
-                waitForConnection(networkAttempt, deadline, error)
+                waitForConnection(networkAttempt, deadline, error, config.provider.displayName)
                 rateLimiter?.awaitRetry(onRateWait)
                 continue@requestLoop
             } finally {
@@ -282,7 +283,7 @@ class CloudEngine(
                 }
                 rateAttempt++
                 if (rateAttempt > MAX_RATE_RETRIES) {
-                    throw RateLimitException(friendlyError(code, body, anthropic))
+                    throw RateLimitException(friendlyError(code, body, config.provider.displayName))
                 }
                 val waitMs = retryWaitMillis(retryAfterHeader, resetHeader, providerMessage)
                     .coerceIn(1_000L, MAX_RATE_WAIT_MS)
@@ -315,14 +316,18 @@ class CloudEngine(
             }
 
             if (code !in 200..299) {
-                val message = friendlyError(code, body, anthropic)
+                val message = friendlyError(code, body, config.provider.displayName)
                 when (code) {
                     401, 403 -> throw AuthenticationException(message)
                     else -> throw RuntimeException(message)
                 }
             }
 
-            val parsed = if (anthropic) parseAnthropic(body) else parseOpenAI(body)
+            val parsed = if (anthropic) {
+                parseAnthropic(body, config.provider.displayName)
+            } else {
+                parseOpenAI(body, config.provider.displayName)
+            }
             if (parsed.text.isBlank()) {
                 throw RuntimeException(
                     "${config.provider.displayName} returned an empty answer. " +
@@ -337,7 +342,7 @@ class CloudEngine(
 
     // ── OpenAI-compatible SSE / JSON parsing ───────────────────────────────────
 
-    private fun parseOpenAI(raw: String): ParsedCompletion {
+    private fun parseOpenAI(raw: String, providerName: String): ParsedCompletion {
         if (raw.isBlank()) return ParsedCompletion("")
         val text = StringBuilder()
         var usage: Long? = null
@@ -349,7 +354,7 @@ class CloudEngine(
             val data = line.removePrefix("data:").trim()
             if (data.isBlank() || data == "[DONE]") return@forEach
             val obj = try { JSONObject(data) } catch (_: Exception) { return@forEach }
-            apiError(obj)?.let { throw RuntimeException(it) }
+            apiError(obj, providerName)?.let { throw RuntimeException(it) }
             val choice = obj.optJSONArray("choices")?.optJSONObject(0)
             val content = choice?.optJSONObject("delta")?.optString("content", "").orEmpty()
             if (content.isNotEmpty()) text.append(content)
@@ -362,7 +367,7 @@ class CloudEngine(
                 "Returned an unreadable response instead of JSON. Please try again."
             )
         }
-        apiError(obj)?.let { throw RuntimeException(it) }
+        apiError(obj, providerName)?.let { throw RuntimeException(it) }
         val choice = obj.optJSONArray("choices")?.optJSONObject(0)
         val content = choice?.optJSONObject("message")?.optString("content", "")
             ?.ifBlank { choice?.optJSONObject("delta")?.optString("content", "").orEmpty() }
@@ -381,7 +386,7 @@ class CloudEngine(
 
     // ── Anthropic SSE / JSON parsing ───────────────────────────────────────────
 
-    private fun parseAnthropic(raw: String): ParsedCompletion {
+    private fun parseAnthropic(raw: String, providerName: String): ParsedCompletion {
         if (raw.isBlank()) return ParsedCompletion("")
         val text = StringBuilder()
         var usage: Long? = null
@@ -395,6 +400,7 @@ class CloudEngine(
             val data = line.removePrefix("data:").trim()
             if (data.isBlank()) return@forEach
             val obj = try { JSONObject(data) } catch (_: Exception) { return@forEach }
+            apiError(obj, providerName)?.let { throw RuntimeException(it) }
             val type = obj.optString("type", "")
             if (type == "content_block_delta") {
                 val delta = obj.optJSONObject("delta")
@@ -430,24 +436,28 @@ class CloudEngine(
 
     // ── shared helpers ─────────────────────────────────────────────────────────
 
-    private fun apiError(obj: JSONObject): String? {
+    private fun apiError(obj: JSONObject, providerName: String): String? {
         val error = obj.optJSONObject("error") ?: return null
-        val message = error.optString("message").trim()
-        val type = error.optString("type").trim()
+        val message = safeProviderMessage(error.optString("message"))
+        val type = safeProviderMessage(error.optString("type"))
         return if (message.isBlank() && type.isBlank()) {
-            "${configProvider().provider.displayName} returned an API error."
+            "$providerName returned an API error."
         } else if (message.isNotBlank()) {
-            "${configProvider().provider.displayName}: $message"
+            "$providerName: $message"
         } else {
-            "${configProvider().provider.displayName}: $type"
+            "$providerName: $type"
         }
     }
 
     private fun apiMessage(body: String): String? = try {
-        JSONObject(body).optJSONObject("error")?.optString("message")?.trim()
+        JSONObject(body).optJSONObject("error")?.optString("message")
+            ?.let(::safeProviderMessage)
     } catch (_: Exception) {
         null
     }
+
+    private fun safeProviderMessage(message: String): String =
+        SensitiveDataRedactor.redact(message.trim(), MAX_PROVIDER_ERROR_CHARS)
 
     private fun retryWaitMillis(retryAfter: String?, reset: String?, message: String?): Long =
         RetryDelayParser.retryAfterMillis(retryAfter)
@@ -459,6 +469,7 @@ class CloudEngine(
         attempt: Int,
         deadline: Long,
         error: IOException,
+        providerName: String,
     ) {
         if (!hasValidatedInternet()) {
             while (System.currentTimeMillis() < deadline && !hasValidatedInternet()) {
@@ -473,10 +484,10 @@ class CloudEngine(
             if (!hasValidatedInternet()) {
                 throw RuntimeException(
                     "The phone stayed offline too long, so Focal could not reach " +
-                        "${configProvider().provider.displayName}.", error
+                        "$providerName.", error
                 )
             }
-            onNetworkStatus("Internet is back. Reconnecting to ${configProvider().provider.displayName}…")
+            onNetworkStatus("Internet is back. Reconnecting to $providerName…")
             delay(750)
             return
         }
@@ -488,7 +499,7 @@ class CloudEngine(
             else -> "connection was interrupted"
         }
         onNetworkStatus(
-            "${configProvider().provider.displayName} $reason. Retrying automatically in ${seconds}s " +
+            "$providerName $reason. Retrying automatically in ${seconds}s " +
                 "(attempt ${attempt + 1})."
         )
         delay(seconds * 1000L)
@@ -519,13 +530,12 @@ class CloudEngine(
                 (error.message ?: error.javaClass.simpleName)
     }
 
-    private fun friendlyError(code: Int, body: String, anthropic: Boolean): String {
-        val provider = configProvider().provider.displayName
+    private fun friendlyError(code: Int, body: String, provider: String): String {
         val message = try {
             val obj = JSONObject(body)
             obj.optJSONObject("error")?.optString("message")?.trim()
                 ?: obj.optJSONObject("error")?.optString("type")?.trim()
-        } catch (_: Exception) { null }
+        } catch (_: Exception) { null }?.let(::safeProviderMessage)
         return when (code) {
             400 -> "$provider rejected this request" +
                 (if (!message.isNullOrBlank()) ": $message" else ".")
@@ -551,6 +561,7 @@ class CloudEngine(
         private const val NETWORK_POLL_MS = 2_000L
         private const val MAX_RATE_RETRIES = 8
         private const val MAX_RATE_WAIT_MS = 10L * 60L * 1_000L
+        private const val MAX_PROVIDER_ERROR_CHARS = 500
         private const val ANTHROPIC_VERSION = "2023-06-01"
     }
 }

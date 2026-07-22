@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import ai.focal.app.SummaryService
+import ai.focal.app.SensitiveDataRedactor
 import ai.focal.app.data.EngineChoice
 import ai.focal.app.data.Settings
 import ai.focal.app.data.SessionPreview
@@ -1104,7 +1105,7 @@ class SummaryViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun friendlyFailure(error: Throwable, fallback: String): String {
-        val message = error.message?.trim().orEmpty()
+        val message = SensitiveDataRedactor.redact(error.message?.trim().orEmpty(), 500)
         return when {
             message.isNotBlank() -> message
             else -> "$fallback (${error.javaClass.simpleName})"

@@ -55,4 +55,22 @@ class ProviderConfigTest {
             )
         }
     }
+
+    @Test
+    fun `cleartext endpoints are restricted to device loopback`() {
+        listOf("localhost", "127.0.0.1", "[::1]").forEach { host ->
+            assertNull(
+                ProviderConfig(LlmProvider.CUSTOM, "model", "http://$host:11434/v1")
+                    .validationError()
+            )
+        }
+        assertTrue(
+            ProviderConfig(LlmProvider.CUSTOM, "model", "http://192.168.1.10:11434/v1")
+                .validationError()!!.contains("https")
+        )
+        assertTrue(
+            ProviderConfig(LlmProvider.CUSTOM, "model", "http://example.com/v1")
+                .validationError()!!.contains("https")
+        )
+    }
 }

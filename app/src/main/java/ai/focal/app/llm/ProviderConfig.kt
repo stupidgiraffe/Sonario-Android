@@ -110,6 +110,9 @@ data class ProviderConfig(
         if (uri.scheme !in setOf("http", "https") || uri.host.isNullOrBlank()) {
             return "The ${provider.displayName} base URL must use http or https and include a host."
         }
+        if (uri.scheme == "http" && !isLoopbackHost(uri.host)) {
+            return "The ${provider.displayName} base URL must use https unless it targets this device."
+        }
         if (uri.userInfo != null) {
             return "Remove embedded credentials from the ${provider.displayName} base URL."
         }
@@ -118,4 +121,8 @@ data class ProviderConfig(
         }
         return null
     }
+
+    private fun isLoopbackHost(host: String): Boolean =
+        host.equals("localhost", ignoreCase = true) ||
+            host == "127.0.0.1" || host == "[::1]" || host == "::1"
 }

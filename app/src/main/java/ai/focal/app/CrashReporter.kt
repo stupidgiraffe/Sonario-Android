@@ -14,8 +14,9 @@ import java.util.Locale
  * run. On the next launch, MainActivity checks for that file and, if present,
  * shows the error on screen instead of the app silently crash-looping.
  *
- * The file lives in the app's EXTERNAL files dir so it's reachable over USB at
- * Android/data/ai.focal.app/files/last_crash.txt (also shown in-app).
+ * The report remains in app-private storage and is shown once in-app. Its text
+ * is redacted before persistence so provider credentials cannot be copied from
+ * an exception message or stack trace.
  */
 object CrashReporter {
 
@@ -35,7 +36,11 @@ object CrashReporter {
     }
 
     private fun crashFile(context: Context): File {
-        val dir = context.getExternalFilesDir(null) ?: context.filesDir
+        return File(context.filesDir, FILE)
+    }
+
+    private fun legacyCrashFile(context: Context): File? {
+        val dir = context.getExternalFilesDir(null) ?: return null
         return File(dir, FILE)
     }
 
@@ -51,17 +56,19 @@ object CrashReporter {
             appendLine()
             append(sw.toString())
         }
-        crashFile(context).writeText(text)
+        crashFile(context).writeText(SensitiveDataRedactor.redact(text, MAX_REPORT_CHARS))
     }
 
     /** Returns the last crash text if one was recorded, else null. */
     fun consumeLastCrash(context: Context): String? {
-        val f = crashFile(context)
-        if (!f.exists()) return null
+        val f = listOfNotNull(crashFile(context), legacyCrashFile(context))
+            .firstOrNull(File::isFile) ?: return null
         return try {
-            val text = f.readText()
+            val text = SensitiveDataRedactor.redact(f.readText(), MAX_REPORT_CHARS)
             f.delete()   // consume: show once, then clear
             text
         } catch (_: Throwable) { null }
     }
+
+    private const val MAX_REPORT_CHARS = 64 * 1024
 }
